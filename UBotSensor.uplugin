@@ -1,0 +1,54 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "0.1.0",
+    "FriendlyName": "uBot Sensor",
+    "Description": "uBot simulated sensors: pose, odometry, IMU, 2D/3D lidar, RGB and depth cameras, with perception media such as smoke. Blueprint-first, no ROS dependency.",
+    "Category": "uBot",
+    "CreatedBy": "AstreoX",
+    "CreatedByURL": "https://github.com/AstreoX",
+    "DocsURL": "https://github.com/AstreoX/uBotSensor",
+    "CanContainContent": true,
+    "IsBetaVersion": true,
+    "Plugins": [
+        {
+            "Name": "UBotCore",
+            "Enabled": true
+        }
+    ],
+    "Modules": [
+        {
+            "Name": "UBotSensor",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        },
+        {
+            "Name": "UBotSensorEditor",
+            "Type": "Editor",
+            "LoadingPhase": "PostEngineInit"
+        }
+    ],
+    "UBot": {
+        "Layer": "Capability",
+        "Repository": "https://github.com/AstreoX/uBotSensor.git",
+        "Requires": [
+            {
+                "Name": "UBotCore",
+                "Version": "^0.1.0"
+            }
+        ],
+        "Provides": [
+            "Sensor.Pose",
+            "Sensor.Odometry",
+            "Sensor.IMU",
+            "Sensor.Lidar2D",
+            "Sensor.Lidar3D",
+            "Sensor.RGBCamera",
+            "Sensor.DepthCamera",
+            "Sensor.Medium"
+        ],
+        "Tags": [
+            "sensor"
+        ]
+    }
+}
