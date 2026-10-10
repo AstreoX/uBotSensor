@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/ubot-mark-light.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/brand/ubot-mark-dark.svg">
+  <img alt="uBot" src="docs/brand/ubot-mark-dark.svg" height="96">
+</picture>
+
 # uBot Sensor
 
 ## 简介
@@ -285,6 +291,6 @@ UFUNCTION 与 UPROPERTY 的**名称保持不变**，所以蓝图引脚在类重�
 
 ## 版本与许可
 
-当前版本 **0.1.0**（Beta，`IsBetaVersion`），仓库 <https://github.com/AstreoX/uBotSensor>。
+当前版本 **0.1.1**（Beta，`IsBetaVersion`），仓库 <https://github.com/AstreoX/uBotSensor>。
 
 Copyright 2026 AstreoX。本项目以 [Apache License 2.0](LICENSE) 发布，可以自由使用、修改和再分发（包括商业用途），再分发时需保留 `LICENSE` 与 `NOTICE` 文件，并注明你修改过的文件。

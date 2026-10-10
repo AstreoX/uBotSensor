@@ -1,7 +1,7 @@
 {
     "FileVersion": 3,
-    "Version": 1,
-    "VersionName": "0.1.0",
+    "Version": 2,
+    "VersionName": "0.1.1",
     "FriendlyName": "uBot Sensor",
     "Description": "uBot simulated sensors: pose, odometry, IMU, 2D/3D lidar, RGB and depth cameras, with perception media such as smoke. Blueprint-first, no ROS dependency.",
     "Category": "uBot",
