@@ -29,7 +29,7 @@ uBotSensor 是 **Capability**（能力）层，只依赖 UE 引擎模块和 `UBo
    git clone https://github.com/AstreoX/uBotSensor.git <Project>/Plugins/uBot/uBotSensor
    ```
 
-   也可以用 uBotCore 的 **uBot Packages** 窗口（`Window` 菜单）安装，它会先装好缺失的依赖；命令行等价于 `UnrealEditor-Cmd.exe <Project>.uproject -run=UBotPackage -Install=UBotSensor`。
+   也可以用 [uBot Manager](https://github.com/AstreoX/uBotManager) 安装（在 uBotCore 的 **uBot** 面板，`Window > uBot`，里点 *Open uBot Manager* 打开），它会先装好缺失的依赖；命令行等价于 `UnrealEditor-Cmd.exe <Project>.uproject -run=UBotPackage -Install=UBotSensor`。
 
 2. 启用插件：在 `Edit > Plugins` 中搜索 uBot Sensor（分类 uBot）并勾选，或在 `.uproject` 中加入
 
