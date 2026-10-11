@@ -1,11 +1,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
+// The frame header (FUBotFrameHeader) and the sample status (EUBotSampleStatus) shared by every
+// sensor live in UBotCore. (A plain comment is dropped by UHT in front of an #include; in front of
+// the UENUM it would become the enum's tooltip, which the docs export.)
 #include "UBotTypes.h"
 #include "UBotSensorTypes.generated.h"
-
-// The frame header (FUBotFrameHeader) and the sample status (EUBotSampleStatus) shared by every
-// sensor live in UBotCore (UBotTypes.h).
 
 UENUM(BlueprintType)
 enum class EUBotPoseReferenceFrame : uint8
