@@ -56,15 +56,6 @@ git clone --branch v0.1.1 https://github.com/AstreoX/uBotSensor.git
 
 **Requirements:** Unreal Engine 5.5, uBotCore ^0.1.0, Visual Studio 2022 with the C++ toolchain for source builds, Windows 10/11 for uBot Manager.
 
-## Quick start
-
-Add an IMU to an Actor and display its sample counter:
-
-1. In an Actor Blueprint, open the **Components** panel, click **Add** and choose `uBot IMU Sensor`.
-2. Select the component and click **+** next to `On Sensor Sampled` under **Events** in **Details**.
-3. Connect `Header` through a `Break` node and wire `Sequence` into `Print String`.
-4. Place the Actor in a level and press Play. The sequence number on screen keeps increasing; `Auto Start` is on by default.
-
 ## Documentation
 
 The documentation site and the files under `docs/` are in Simplified Chinese.

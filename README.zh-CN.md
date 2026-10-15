@@ -56,15 +56,6 @@ git clone --branch v0.1.1 https://github.com/AstreoX/uBotSensor.git
 
 **要求：** Unreal Engine 5.5、uBotCore ^0.1.0；源码构建需要带 C++ 工具链的 Visual Studio 2022；uBot Manager 需要 Windows 10 / 11。
 
-## 快速开始
-
-给 Actor 添加 IMU，并显示它的采样序号：
-
-1. 在 Actor 蓝图的 **Components** 面板点击 **Add**，选择 `uBot IMU Sensor`。
-2. 选中该组件，在 **Details** 的 **Events** 区点击 `On Sensor Sampled` 旁的 **+**。
-3. 将 `Header` 经 `Break` 节点拆开，把 `Sequence` 连到 `Print String`。
-4. 将 Actor 放入关卡并点击 Play，屏幕上的序号持续增加；`Auto Start` 默认开启。
-
 ## 文档
 
 | 我想…… | 参见 |
