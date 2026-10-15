@@ -1,7 +1,5 @@
 # 测试
 
-本页摘自旧版 README，文字保持原样。
-
 测试名都以 `UBotSensor.` 开头，共 29 项，分类为 `Camera`、`Depth`、`Interface`、`Lidar`、`Lidar2D`、`Lidar3D`、`Math`、`Medium`、`Odometry`、`Redirects`、`Scheduling`、`SmokeInterference`。其中 14 项从旧版迁移（`AgentSensorCore.` 前缀改为 `UBotSensor.`，`SmokeInterference.*` 保持原名），其余为新增：
 
 - `Scheduling.*`：在临时 Game 世界里手动 tick，验证 100 Hz IMU 在 0.05 s 帧里每帧恰好一个样本、时间戳严格递增、没有 `InvalidDeltaTime`；运行中改频率；相机协调器的一个间隔延迟、每 tick 至多一组、组序号与组时间戳、丢弃计数；无分组相机的 tick 采样和暂停行为。测试用相机只记录捕获、不渲染，不需要 GPU。

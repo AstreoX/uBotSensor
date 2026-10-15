@@ -1,6 +1,6 @@
 # 架构与实现细节
 
-本页收录文档站（<https://astreox.github.io/uBotDocs/>）没有覆盖的实现细节，摘自旧版 README，文字保持原样。用法、属性和各传感器的行为见文档站的 [uBotSensor 手册](https://astreox.github.io/uBotDocs/sensor/)。下面文字里的“下表”“下一节”指旧版 README 的“传感器一览”和“通用用法”，现在对应文档站的[传感器概述](https://astreox.github.io/uBotDocs/sensor/)和[传感器通用用法](https://astreox.github.io/uBotDocs/sensor/basics/)。
+本页收录文档站没有覆盖的实现细节。用法、属性和各传感器的行为见文档站的 [uBotSensor 手册](https://astreox.github.io/uBotDocs/sensor/)；文中的“下表”“下一节”对应文档站的[传感器概述](https://astreox.github.io/uBotDocs/sensor/)和[传感器通用用法](https://astreox.github.io/uBotDocs/sensor/basics/)。
 
 ## 在 uBot 家族中的位置
 

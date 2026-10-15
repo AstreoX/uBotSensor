@@ -23,13 +23,13 @@
 
 ## 简介
 
-uBotSensor 为 Actor 提供仿真传感器：位姿、里程计、IMU、2D / 3D 激光雷达、RGB 相机和深度相机。每种传感器都是在编辑器里添加的组件，可以在蓝图或 C++ 中读取数据。它建立在 [uBotCore](https://github.com/AstreoX/uBotCore) 之上，由 Core 提供仿真时钟和每个样本都带的帧头；目前处于 Beta 阶段。
+uBotSensor 为 Actor 提供仿真传感器：位姿、里程计、IMU、2D / 3D 激光雷达、RGB 相机和深度相机。每种传感器都是在编辑器中添加的组件，数据可在蓝图或 C++ 中读取。它建立在 [uBotCore](https://github.com/AstreoX/uBotCore) 之上，仿真时钟和每个样本携带的帧头由 Core 提供。
 
-- **蓝图优先**：每种传感器都在组件列表的 `uBot` 分类下，属性、函数和事件都暴露给蓝图。
-- **没有 ROS 依赖**：输出是 UE 原生的结构体和对象，位置、距离和速度用米和秒，角度用弧度；发布到 ROS 2 交给 [uBotROS](https://github.com/AstreoX/uBotROS)。
-- **按仿真时间采样**：定时采样跟随仿真时钟，每个 world tick 最多一个样本，所以时间戳严格递增；噪声使用固定种子。
-- **自描述的帧**：每个样本都带帧头，包含传感器 ID、坐标系 ID、序号、时间戳和状态。
-- **相机同步**：采集协调器让多个相机在同一个仿真时刻采集。
+- **蓝图优先**：每种传感器都位于组件列表的 `uBot` 分类下，属性、函数和事件均暴露给蓝图。
+- **没有 ROS 依赖**：输出是 UE 原生的结构体和对象，位置、距离和速度用米和秒，角度用弧度，由 [uBotROS](https://github.com/AstreoX/uBotROS) 发布到 ROS 2。
+- **按仿真时间采样**：定时采样跟随仿真时钟，每个 world tick 最多采样一次，时间戳因此严格递增；噪声使用固定种子。
+- **自描述的帧**：每个样本都带有帧头，包含传感器 ID、坐标系 ID、序号、时间戳和状态。
+- **相机同步**：采集协调器让多个相机在同一仿真时刻采集。
 
 | 组件 | 输出 | 默认频率 |
 | --- | --- | --- |
@@ -40,13 +40,13 @@ uBotSensor 为 Actor 提供仿真传感器：位姿、里程计、IMU、2D / 3D 
 | `uBot 3D LiDAR Sensor` | 点云：命中点（m）、环号、强度 | 10 Hz |
 | `uBot RGB Camera Sensor` | `BGRA8` 图像，像素按需读回 CPU | 30 Hz |
 | `uBot Depth Camera Sensor` | `Depth32FC1` 深度图（m），0 表示无效 | 30 Hz |
-| 感知介质（烟雾） | 不是传感器：截断激光雷达射线，给 RGB 图像染色，把深度改为入口距离 | 无 |
+| 感知介质（烟雾） | 截断激光雷达射线，给 RGB 图像染色，把深度改为入口距离 | — |
 
 ## 安装
 
-**推荐：用 uBot Manager。** 到 [uBotManager 的 Releases 页面](https://github.com/AstreoX/uBotManager/releases)下载安装包，打开工程的 `.uproject`，在 **Package** 视图里选中 `UBotSensor`，点 **安装**，再点 **应用…**。uBotCore 会一起装好，插件位于 `Plugins/uBot/`。
+**推荐：uBot Manager。** 从 [uBotManager 的 Releases 页面](https://github.com/AstreoX/uBotManager/releases)下载安装包，打开工程的 `.uproject`，在 **Package** 视图中选中 `UBotSensor`，依次点击 **安装** 和 **应用…**。uBotCore 作为依赖一并安装，插件位于 `Plugins/uBot/`。
 
-**手动安装：** 把两个仓库克隆到工程里，在 `Edit > Plugins` 中启用 **uBot Core** 和 **uBot Sensor**（分类 uBot），然后重启编辑器：
+**手动安装：** 将两个仓库克隆到工程中，在 `Edit > Plugins` 中启用 **uBot Core** 和 **uBot Sensor**（分类 uBot），然后重启编辑器：
 
 ```powershell
 mkdir <Project>/Plugins/uBot -Force; cd <Project>/Plugins/uBot
@@ -54,30 +54,30 @@ git clone --branch v0.1.2 https://github.com/AstreoX/uBotCore.git
 git clone --branch v0.1.1 https://github.com/AstreoX/uBotSensor.git
 ```
 
-**要求：** Unreal Engine 5.5 和 uBotCore ^0.1.0。从源码安装要编译 C++，需要带 C++ 工具链的 Visual Studio 2022；uBot Manager 运行在 Windows 10 / 11 上，条件允许时优先下载预编译包。
+**要求：** Unreal Engine 5.5、uBotCore ^0.1.0；源码构建需要带 C++ 工具链的 Visual Studio 2022；uBot Manager 需要 Windows 10 / 11。
 
 ## 快速开始
 
-给一个 Actor 加上 IMU，看它采样：
+给 Actor 添加 IMU，并显示它的采样序号：
 
-1. 在 Actor 蓝图的 **Components** 面板点 **Add**，选择 `uBot IMU Sensor`。
-2. 选中该组件，在 **Details** 的 **Events** 区点 `On Sensor Sampled` 旁的 **+**。
-3. 把 `Header` 经 `Break` 节点接出，将 `Sequence` 连到 `Print String`。
-4. 把 Actor 放进关卡并点 Play。屏幕上的数字不断增加（`Auto Start` 默认开启；IMU 采样频率 100 Hz，每帧最多采样一次）。
+1. 在 Actor 蓝图的 **Components** 面板点击 **Add**，选择 `uBot IMU Sensor`。
+2. 选中该组件，在 **Details** 的 **Events** 区点击 `On Sensor Sampled` 旁的 **+**。
+3. 将 `Header` 经 `Break` 节点拆开，把 `Sequence` 连到 `Print String`。
+4. 将 Actor 放入关卡并点击 Play，屏幕上的序号持续增加；`Auto Start` 默认开启。
 
 ## 文档
 
-| 我想…… | 去这里 |
+| 我想…… | 参见 |
 | --- | --- |
-| 跟着完整的第一个传感器教程做 | [五分钟上手](https://astreox.github.io/uBotDocs/start/quickstart/) |
-| 查看所有传感器和它们的输出 | [uBotSensor 概述](https://astreox.github.io/uBotDocs/sensor/) |
-| 启动、停止和读取任意传感器 | [传感器通用用法](https://astreox.github.io/uBotDocs/sensor/basics/) |
+| 按步骤添加第一个传感器 | [五分钟上手](https://astreox.github.io/uBotDocs/start/quickstart/) |
+| 查阅各传感器及其输出 | [uBotSensor 概述](https://astreox.github.io/uBotDocs/sensor/) |
+| 启动、停止和读取传感器 | [传感器通用用法](https://astreox.github.io/uBotDocs/sensor/basics/) |
 | 选择采样频率 | [性能与采样频率](https://astreox.github.io/uBotDocs/sensor/performance/) |
-| 加入干扰激光雷达和相机的烟雾 | [感知介质（烟雾干扰）](https://astreox.github.io/uBotDocs/sensor/medium/) |
+| 添加影响激光雷达和相机的烟雾 | [感知介质（烟雾干扰）](https://astreox.github.io/uBotDocs/sensor/medium/) |
 | 把传感器数据发布到 ROS 2 | [发布传感器数据](https://astreox.github.io/uBotDocs/ros/publish-sensors/) |
-| 在 C++ 里使用传感器 | [在 C++ 中使用传感器与接口](https://astreox.github.io/uBotDocs/develop/cpp/) |
+| 在 C++ 中使用传感器 | [在 C++ 中使用传感器与接口](https://astreox.github.io/uBotDocs/develop/cpp/) |
 | 从 AgentSensorCore 迁移 | [从旧插件迁移](https://astreox.github.io/uBotDocs/develop/migration/) |
-| 了解模块划分和采样调度的实现 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| 查阅模块划分和采样调度的实现 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | 运行自动化测试 | [docs/TESTING.md](docs/TESTING.md) |
 
 ## uBot 家族
@@ -93,11 +93,11 @@ git clone --branch v0.1.1 https://github.com/AstreoX/uBotSensor.git
 
 ## 开发
 
-- **构建：** 把仓库放到 `<Project>/Plugins/uBot/uBotSensor` 并启用 uBotCore；首次打开工程时，编辑器会提示编译 `UBotSensor` 和 `UBotSensorEditor` 两个模块。
+- **构建：** 将仓库放到 `<Project>/Plugins/uBot/uBotSensor` 并启用 uBotCore；首次打开工程时，编辑器会提示编译 `UBotSensor` 和 `UBotSensorEditor` 模块。
 - **测试：** 测试是名称以 `UBotSensor.` 开头的 Unreal 自动化测试，可在 Session Frontend 或命令行运行，见 [docs/TESTING.md](docs/TESTING.md)。
 - **实现细节：** 模块、能力键和采样调度见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
-- **反馈问题：** 到 [GitHub Issues](https://github.com/AstreoX/uBotSensor/issues) 提交，请附上 UE 版本、插件版本和复现步骤。
+- **反馈问题：** 在 [GitHub Issues](https://github.com/AstreoX/uBotSensor/issues) 提交，请附上 UE 版本、插件版本和复现步骤。
 
 ## 许可
 
-Copyright 2026 AstreoX。本项目以 [Apache License 2.0](LICENSE) 发布，附 [NOTICE](NOTICE)，可以自由使用、修改和再分发，包括商业用途。再分发时需保留 `LICENSE` 与 `NOTICE` 文件，并注明你修改过的文件。
+Copyright 2026 AstreoX。本项目以 [Apache License 2.0](LICENSE) 发布（见 [NOTICE](NOTICE)），允许使用、修改和再分发，包括商业用途。再分发时需保留 `LICENSE` 与 `NOTICE` 文件，并注明修改过的文件。
