@@ -73,7 +73,7 @@ The documentation site and the files under `docs/` are in Simplified Chinese.
 | Look up modules and scheduling internals | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Run the automation tests | [docs/TESTING.md](docs/TESTING.md) |
 
-## uBot family
+## uBot series
 
 | Repository | What it is |
 | --- | --- |

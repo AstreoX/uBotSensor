@@ -2,7 +2,7 @@
 
 本页收录文档站没有覆盖的实现细节。用法、属性和各传感器的行为见文档站的 [uBotSensor 手册](https://astreox.github.io/uBotDocs/sensor/)；文中的“下表”“下一节”对应文档站的[传感器概述](https://astreox.github.io/uBotDocs/sensor/)和[传感器通用用法](https://astreox.github.io/uBotDocs/sensor/basics/)。
 
-## 在 uBot 家族中的位置
+## 在 uBot 系列中的位置
 
 uBotSensor 是 **Capability**（能力）层，只依赖 UE 引擎模块和 `UBotCore ^0.1.0`（`.uplugin` 的 `"Plugins"` 与 `"UBot"` 块都声明了这个依赖）。上层的 `UBotROS` 适配器包依赖它，并负责把这些传感器发布为 ROS 2 话题。
 

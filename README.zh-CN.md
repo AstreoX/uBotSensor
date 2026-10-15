@@ -71,7 +71,7 @@ git clone --branch v0.1.1 https://github.com/AstreoX/uBotSensor.git
 | 查阅模块划分和采样调度的实现 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | 运行自动化测试 | [docs/TESTING.md](docs/TESTING.md) |
 
-## uBot 家族
+## uBot 系列
 
 | 仓库 | 说明 |
 | --- | --- |
