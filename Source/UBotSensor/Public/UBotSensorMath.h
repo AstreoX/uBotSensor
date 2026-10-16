@@ -11,6 +11,13 @@
 namespace UBot::SensorMath
 {
     UBOTSENSOR_API FVector QuaternionDeltaToAngularVelocity(const FQuat& Previous, const FQuat& Current, double DeltaSeconds);
+
+    /** Velocity of a point fixed to a rigid body, world frame: OriginVelocity + AngularVelocity x OffsetMeters (offset = point - body origin, world axes, meters). */
+    UBOTSENSOR_API FVector RigidPointVelocity(const FVector& OriginVelocity, const FVector& AngularVelocity, const FVector& OffsetMeters);
+
+    /** Kinematic acceleration of a point fixed to a rigid body, world frame: OriginAcceleration + AngularAcceleration x Offset + AngularVelocity x (AngularVelocity x Offset). */
+    UBOTSENSOR_API FVector RigidPointAcceleration(const FVector& OriginAcceleration, const FVector& AngularVelocity, const FVector& AngularAcceleration, const FVector& OffsetMeters);
+
     UBOTSENSOR_API float GaussianSample(FRandomStream& RandomStream, float StandardDeviation);
     UBOTSENSOR_API FVector GaussianVector(FRandomStream& RandomStream, float StandardDeviation);
     UBOTSENSOR_API TArray<double> MakeDiagonalCovariance6(const FVector& PositionOrLinearVariance, const FVector& RotationOrAngularVariance);

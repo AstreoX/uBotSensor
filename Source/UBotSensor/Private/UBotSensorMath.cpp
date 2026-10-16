@@ -16,10 +16,25 @@ namespace UBot::SensorMath
             Delta = FQuat(-Delta.X, -Delta.Y, -Delta.Z, -Delta.W);
         }
 
-        FVector Axis = FVector::ForwardVector;
-        double Angle = 0.0;
-        Delta.ToAxisAndAngle(Axis, Angle);
-        return Axis.GetSafeNormal() * (Angle / DeltaSeconds);
+        // The rotation vector is the vector part times angle / sin(angle / 2), with angle = 2 atan2(|v|, W). FQuat::ToAxisAndAngle
+        // is not used: it gives the X axis for any vector part below 1e-4 (turns of less than 2e-4 rad, e.g. rates under 0.02 rad/s
+        // at 100 Hz) and acos loses all precision for angles close to zero. The frame stays the world frame of Current * Previous^-1.
+        const FVector Vector(Delta.X, Delta.Y, Delta.Z);
+        const double VectorSize = Vector.Size();
+        const double Scale = VectorSize > UE_DOUBLE_SMALL_NUMBER ? 2.0 * FMath::Atan2(VectorSize, Delta.W) / VectorSize : 2.0;
+        return Vector * (Scale / DeltaSeconds);
+    }
+
+    FVector RigidPointVelocity(const FVector& OriginVelocity, const FVector& AngularVelocity, const FVector& OffsetMeters)
+    {
+        return OriginVelocity + FVector::CrossProduct(AngularVelocity, OffsetMeters);
+    }
+
+    FVector RigidPointAcceleration(const FVector& OriginAcceleration, const FVector& AngularVelocity, const FVector& AngularAcceleration, const FVector& OffsetMeters)
+    {
+        return OriginAcceleration
+            + FVector::CrossProduct(AngularAcceleration, OffsetMeters)
+            + FVector::CrossProduct(AngularVelocity, FVector::CrossProduct(AngularVelocity, OffsetMeters));
     }
 
     float GaussianSample(FRandomStream& RandomStream, float StandardDeviation)

@@ -4,7 +4,7 @@
 
 ## 在 uBot 系列中的位置
 
-uBotSensor 是 **Capability**（能力）层，只依赖 UE 引擎模块和 `UBotCore ^0.1.0`（`.uplugin` 的 `"Plugins"` 与 `"UBot"` 块都声明了这个依赖）。上层的 `UBotROS` 适配器包依赖它，并负责把这些传感器发布为 ROS 2 话题。
+uBotSensor 是 **Capability**（能力）层，只依赖 UE 引擎模块和 `UBotCore ^0.1.3`（刚体状态源接口从 uBotCore 0.1.3 起提供；`.uplugin` 的 `"UBot"` 块声明了这个版本范围，`"Plugins"` 块声明依赖本身）。上层的 `UBotROS` 适配器包依赖它，并负责把这些传感器发布为 ROS 2 话题。
 
 | 模块 | 类型 | 加载阶段 | 说明 |
 | --- | --- | --- | --- |
@@ -32,6 +32,10 @@ uBotSensor 是 **Capability**（能力）层，只依赖 UE 引擎模块和 `UBo
 - **每个 world tick 最多一个样本。** 一帧跨过多个采样间隔时，多出来的间隔不会补采，而是计入 `GetDroppedSampleCount()`（`StartSensor` 时清零）。因此时间戳严格递增，并等于该帧的仿真时间。
 - 运行中调用 `SetUpdateRateHz` 只改变间隔并保持相位：不重启、不取立即样本，也不重置 IMU 等的历史。
 - 子类不能把 `PrimaryComponentTick.bCanEverTick` 清掉。
+
+## 速度与加速度的来源
+
+Pose、Odometry 和 IMU 有两种模式（0.1.2 起）。传感器沿附着链向上找到 uBotCore 的刚体状态源（`UBot::BodyState::GetNearestBodyState`）并且 `bUseBodyState` 打开时，直接读状态里的速度和加速度（状态模式）；否则对相邻样本的位姿做差分（差分模式）。两种模式共用噪声、滤波和限幅的后处理代码，计算在 `Private/UBotSensorBodyMotion.*`。IMU 在状态模式下加上传感器相对刚体原点的杆臂项 α×r + ω×(ω×r)。帧头时间戳仍是采样时的仿真时间，状态不外推，状态的年龄由 `GetBodyStateAgeSeconds` 给出。新成员都追加在这三个类的末尾，也没有新增虚函数，已发布的 uBotROS 二进制按偏移访问这些类，因此不受影响。用户可见的规则见文档站的[读取刚体状态](https://astreox.github.io/uBotDocs/sensor/body-state/)。
 
 ## 相机的渲染与读回
 

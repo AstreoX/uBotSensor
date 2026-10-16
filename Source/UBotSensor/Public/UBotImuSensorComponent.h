@@ -98,4 +98,54 @@ private:
     FVector PreviousFilteredAngularVelocity = FVector::ZeroVector;
     double PreviousTimestampSeconds = 0.0;
     int32 HistorySampleCount = 0;
+
+// Added in 0.1.2. Everything from here on follows all earlier members on purpose: released UBotROS binaries
+// access this class at compiled offsets, so new members go at the very end and no virtual function is added.
+public:
+    /**
+     * When a body state source (a physics backend binding, a vehicle's own integrator) moves the body this
+     * sensor is attached to, read velocities and accelerations from that state instead of differentiating
+     * poses. The parts between that body and the sensor count as rigid; turn this off for a sensor on a part
+     * that moves on its own, such as a gimbal.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "IMU|Motion")
+    bool bUseBodyState = true;
+
+    /** True when the latest sample took its motion from a body state source. */
+    UFUNCTION(BlueprintPure, Category = "uBot Sensor|IMU")
+    bool IsUsingBodyState() const { return bLatestSampleUsedBodyState; }
+
+    /** Sample time minus the time of the body state the latest sample used (how far the physics step lay behind the sample), s; 0 when it used none. */
+    UFUNCTION(BlueprintPure, Category = "uBot Sensor|IMU")
+    double GetBodyStateAgeSeconds() const { return LatestBodyStateAgeSeconds; }
+
+private:
+    /**
+     * Noise, bias random walk, low-pass filter and clamp of one valid sample, applied to the true values
+     * (difference and state mode alike). DeltaSeconds is the interval between the headers of the two samples.
+     */
+    void PostProcessSample(FVector& InOutAccelerationLocal, FVector& InOutAngularVelocityLocal, double DeltaSeconds);
+
+    /**
+     * Records a body state in the state-mode history. When the state time moved forward since the previous
+     * state, the body accelerations are derived from the velocity change over that time; otherwise the
+     * last derived values are held.
+     */
+    void UpdateBodyStateHistory(double StateTimeSeconds, const FVector& BodyLinearVelocity, const FVector& BodyAngularVelocity);
+
+    bool bLatestSampleUsedBodyState = false;
+    double LatestBodyStateAgeSeconds = 0.0;
+
+    // Mode the pose history above (Previous*, HistorySampleCount) was recorded in.
+    bool bHistoryInStateMode = false;
+
+    // State-mode history: the previous state's time and body velocities, and the body accelerations derived
+    // from them for sources whose state carries none.
+    bool bHasStateHistory = false;
+    double PreviousStateTimeSeconds = 0.0;
+    FVector PreviousBodyLinearVelocity = FVector::ZeroVector;
+    FVector PreviousBodyAngularVelocity = FVector::ZeroVector;
+    bool bHasDerivedBodyAccelerations = false;
+    FVector DerivedBodyLinearAcceleration = FVector::ZeroVector;
+    FVector DerivedBodyAngularAcceleration = FVector::ZeroVector;
 };

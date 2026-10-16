@@ -3,6 +3,7 @@
 #include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Actor.h"
+#include "UBotSensorBodyMotion.h"
 #include "UBotSensorMath.h"
 #include "UBotUnits.h"
 #include "UObject/ConstructorHelpers.h"
@@ -27,7 +28,11 @@ FName UUBotOdometrySensorComponent::GetSensorTypeName() const
 
 bool UUBotOdometrySensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FString& OutErrorMessage)
 {
+    namespace SensorBodyMotion = UBot::SensorBodyMotion;
+
     USceneComponent* TrackedComponent = GetTrackedComponent();
+    bLatestSampleUsedBodyState = false;
+    LatestBodyStateAgeSeconds = 0.0;
     LatestOdometryData = FUBotOdometrySensorData();
     LatestOdometryData.Header = Header;
     LatestOdometryData.OdometryFrameId = OdometryFrameId.IsEmpty() ? TEXT("odom") : OdometryFrameId;
@@ -43,10 +48,27 @@ bool UUBotOdometrySensorComponent::CaptureSensorData(FUBotFrameHeader& Header, F
         return false;
     }
 
+    // Where the velocities of this sample come from. State mode: the body state source that moves the
+    // tracked component's body. Difference mode (no source, or bUseBodyState off): finite differences of
+    // component poses, the only mode before 0.1.2. The pose is the component's in both modes.
+    SensorBodyMotion::FPointMotion Motion;
+    SensorBodyMotion::EReadResult ReadResult = SensorBodyMotion::EReadResult::NoSource;
+    if (bUseBodyState)
+    {
+        ReadResult = SensorBodyMotion::Read(*TrackedComponent, Motion);
+    }
+    const bool bStateMode = ReadResult == SensorBodyMotion::EReadResult::Ok;
+    if (bStateMode)
+    {
+        bLatestSampleUsedBodyState = true;
+        LatestBodyStateAgeSeconds = Header.TimestampSeconds - Motion.StateTimeSeconds;
+    }
+
     const FTransform CurrentWorld = TrackedComponent->GetComponentTransform();
     if (!bHasOrigin)
     {
         InitializeAtTransform(CurrentWorld, Header.TimestampSeconds, true);
+        bPreviousSampleInStateMode = bStateMode;
         MarkHeader(Header, EUBotSampleStatus::WarmingUp, false);
         LatestOdometryData.Header = Header;
         OnOdometryDataUpdated.Broadcast(LatestOdometryData);
@@ -56,48 +78,65 @@ bool UUBotOdometrySensorComponent::CaptureSensorData(FUBotFrameHeader& Header, F
     const FTransform RelativePose = CurrentWorld.GetRelativeTransform(OriginWorld);
     LatestOdometryData.PositionMeters = UBot::Units::CentimetersToMeters(RelativePose.GetLocation());
     LatestOdometryData.OrientationQuaternion = RelativePose.GetRotation().GetNormalized();
-    if (!bHasPreviousSample)
+
+    // The previous sample is also dropped when a provided body has no state yet and when the mode changed
+    // since it (a source came or went, or bUseBodyState changed): the origin stays.
+    if (!bHasPreviousSample || ReadResult == SensorBodyMotion::EReadResult::NoState || bPreviousSampleInStateMode != bStateMode)
     {
         InitializeAtTransform(CurrentWorld, Header.TimestampSeconds, false);
+        bPreviousSampleInStateMode = bStateMode;
         MarkHeader(Header, EUBotSampleStatus::WarmingUp, false);
         LatestOdometryData.Header = Header;
         OnOdometryDataUpdated.Broadcast(LatestOdometryData);
         return false;
     }
 
-    const double DeltaSeconds = Header.TimestampSeconds - PreviousTimestampSeconds;
-    if (DeltaSeconds < MinimumValidDeltaSeconds || DeltaSeconds > MaximumValidDeltaSeconds)
+    // Ends an invalid sample after which the odometry starts over at the current pose (new origin).
+    const auto RestartAtCurrentPose = [&](EUBotSampleStatus Status)
     {
         InitializeAtTransform(CurrentWorld, Header.TimestampSeconds, true);
+        bPreviousSampleInStateMode = bStateMode;
         LatestOdometryData = FUBotOdometrySensorData();
         LatestOdometryData.OdometryFrameId = OdometryFrameId.IsEmpty() ? TEXT("odom") : OdometryFrameId;
         LatestOdometryData.ChildFrameId = ChildFrameId.IsEmpty() ? TEXT("base_link") : ChildFrameId;
         FillCovariance(LatestOdometryData);
-        MarkHeader(Header, EUBotSampleStatus::InvalidDeltaTime, false);
+        MarkHeader(Header, Status, false);
         LatestOdometryData.Header = Header;
         OnOdometryDataUpdated.Broadcast(LatestOdometryData);
         return false;
+    };
+
+    const double DeltaSeconds = Header.TimestampSeconds - PreviousTimestampSeconds;
+    if (DeltaSeconds < MinimumValidDeltaSeconds || DeltaSeconds > MaximumValidDeltaSeconds)
+    {
+        return RestartAtCurrentPose(EUBotSampleStatus::InvalidDeltaTime);
     }
 
     const float TravelMeters = UBot::Units::CentimetersToMeters(CurrentWorld.GetLocation() - PreviousWorld.GetLocation()).Size();
     const float RotationDegrees = FMath::RadiansToDegrees(PreviousWorld.GetRotation().AngularDistance(CurrentWorld.GetRotation()));
     if (TravelMeters > TeleportDistanceMeters || RotationDegrees > TeleportAngleDegrees)
     {
-        InitializeAtTransform(CurrentWorld, Header.TimestampSeconds, true);
-        LatestOdometryData = FUBotOdometrySensorData();
-        LatestOdometryData.OdometryFrameId = OdometryFrameId.IsEmpty() ? TEXT("odom") : OdometryFrameId;
-        LatestOdometryData.ChildFrameId = ChildFrameId.IsEmpty() ? TEXT("base_link") : ChildFrameId;
-        FillCovariance(LatestOdometryData);
-        MarkHeader(Header, EUBotSampleStatus::TeleportDetected, false);
-        LatestOdometryData.Header = Header;
-        OnOdometryDataUpdated.Broadcast(LatestOdometryData);
-        return false;
+        return RestartAtCurrentPose(EUBotSampleStatus::TeleportDetected);
     }
 
-    const FVector LinearVelocityWorld = UBot::Units::CentimetersToMeters(CurrentWorld.GetLocation() - PreviousWorld.GetLocation()) / DeltaSeconds;
-    const FVector AngularVelocityWorld = UBot::SensorMath::QuaternionDeltaToAngularVelocity(PreviousWorld.GetRotation(), CurrentWorld.GetRotation(), DeltaSeconds);
-    LatestOdometryData.LinearVelocityLocalMetersPerSecond = CurrentWorld.GetRotation().UnrotateVector(LinearVelocityWorld);
-    LatestOdometryData.AngularVelocityLocalRadPerSecond = CurrentWorld.GetRotation().UnrotateVector(AngularVelocityWorld);
+    if (bStateMode)
+    {
+        // The state lies in the future or too far in the past: it does not describe this sample.
+        if (!SensorBodyMotion::IsStateAgeAcceptable(LatestBodyStateAgeSeconds, MaximumValidDeltaSeconds))
+        {
+            return RestartAtCurrentPose(EUBotSampleStatus::InvalidDeltaTime);
+        }
+
+        LatestOdometryData.LinearVelocityLocalMetersPerSecond = CurrentWorld.GetRotation().UnrotateVector(Motion.LinearVelocity);
+        LatestOdometryData.AngularVelocityLocalRadPerSecond = CurrentWorld.GetRotation().UnrotateVector(Motion.AngularVelocity);
+    }
+    else
+    {
+        const FVector LinearVelocityWorld = UBot::Units::CentimetersToMeters(CurrentWorld.GetLocation() - PreviousWorld.GetLocation()) / DeltaSeconds;
+        const FVector AngularVelocityWorld = UBot::SensorMath::QuaternionDeltaToAngularVelocity(PreviousWorld.GetRotation(), CurrentWorld.GetRotation(), DeltaSeconds);
+        LatestOdometryData.LinearVelocityLocalMetersPerSecond = CurrentWorld.GetRotation().UnrotateVector(LinearVelocityWorld);
+        LatestOdometryData.AngularVelocityLocalRadPerSecond = CurrentWorld.GetRotation().UnrotateVector(AngularVelocityWorld);
+    }
 
     if (bNoiseEnabled)
     {
@@ -114,6 +153,7 @@ bool UUBotOdometrySensorComponent::CaptureSensorData(FUBotFrameHeader& Header, F
     LatestOdometryData.bHasVelocity = true;
     PreviousWorld = CurrentWorld;
     PreviousTimestampSeconds = Header.TimestampSeconds;
+    bPreviousSampleInStateMode = bStateMode;
     MarkHeader(Header, EUBotSampleStatus::Valid, true);
     LatestOdometryData.Header = Header;
     OnOdometryDataUpdated.Broadcast(LatestOdometryData);
@@ -133,6 +173,8 @@ void UUBotOdometrySensorComponent::ResetOdometry()
     bHasOrigin = false;
     bHasPreviousSample = false;
     PreviousTimestampSeconds = 0.0;
+    // The state-mode history goes with it.
+    bPreviousSampleInStateMode = false;
     if (USceneComponent* TrackedComponent = GetTrackedComponent())
     {
         OriginWorld = TrackedComponent->GetComponentTransform();

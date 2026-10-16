@@ -3,6 +3,7 @@
 #include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Actor.h"
+#include "UBotSensorBodyMotion.h"
 #include "UBotSensorMath.h"
 #include "UBotUnits.h"
 #include "UObject/ConstructorHelpers.h"
@@ -27,6 +28,11 @@ FName UUBotPoseSensorComponent::GetSensorTypeName() const
 
 bool UUBotPoseSensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FString& OutErrorMessage)
 {
+    namespace SensorBodyMotion = UBot::SensorBodyMotion;
+
+    bLatestSampleUsedBodyState = false;
+    LatestBodyStateAgeSeconds = 0.0;
+
     FTransform CurrentPose;
     FString ResolvedFrameId;
     if (!ResolvePoseInReferenceFrame(CurrentPose, ResolvedFrameId, OutErrorMessage))
@@ -44,7 +50,29 @@ bool UUBotPoseSensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FStri
     LatestPoseData.PositionMeters = UBot::Units::CentimetersToMeters(CurrentPose.GetLocation());
     LatestPoseData.OrientationQuaternion = CurrentPose.GetRotation().GetNormalized();
 
-    if (bIncludeVelocity && bHasPreviousPose)
+    // State mode: the World frame, with a body state source that moves the sensor's body. Then the
+    // velocities are the state's, mapped to the sensor point; a provided body without a state yet gives a
+    // pose without velocity. Otherwise (difference mode, the only mode before 0.1.2) they are finite
+    // differences of the previous and the current pose.
+    SensorBodyMotion::FPointMotion Motion;
+    SensorBodyMotion::EReadResult ReadResult = SensorBodyMotion::EReadResult::NoSource;
+    if (bUseBodyState && ReferenceFrame == EUBotPoseReferenceFrame::World)
+    {
+        ReadResult = SensorBodyMotion::Read(*this, Motion);
+    }
+
+    if (ReadResult == SensorBodyMotion::EReadResult::Ok)
+    {
+        bLatestSampleUsedBodyState = true;
+        LatestBodyStateAgeSeconds = Header.TimestampSeconds - Motion.StateTimeSeconds;
+        if (bIncludeVelocity)
+        {
+            LatestPoseData.LinearVelocityMetersPerSecond = Motion.LinearVelocity;
+            LatestPoseData.AngularVelocityRadPerSecond = Motion.AngularVelocity;
+            LatestPoseData.bHasVelocity = true;
+        }
+    }
+    else if (ReadResult == SensorBodyMotion::EReadResult::NoSource && bIncludeVelocity && bHasPreviousPose)
     {
         const double DeltaSeconds = Header.TimestampSeconds - PreviousTimestampSeconds;
         if (DeltaSeconds > UE_SMALL_NUMBER)

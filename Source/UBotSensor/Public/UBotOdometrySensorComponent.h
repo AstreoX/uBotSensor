@@ -96,4 +96,31 @@ private:
     double PreviousTimestampSeconds = 0.0;
     bool bHasOrigin = false;
     bool bHasPreviousSample = false;
+
+// Added in 0.1.2. Everything from here on follows all earlier members on purpose: released UBotROS binaries
+// access this class at compiled offsets, so new members go at the very end and no virtual function is added.
+public:
+    /**
+     * When a body state source (a physics backend binding, a vehicle's own integrator) moves the body this
+     * sensor is attached to, read velocities and accelerations from that state instead of differentiating
+     * poses. The parts between that body and the sensor count as rigid; turn this off for a sensor on a part
+     * that moves on its own, such as a gimbal.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Odometry|Motion")
+    bool bUseBodyState = true;
+
+    /** True when the latest sample took its motion from a body state source. */
+    UFUNCTION(BlueprintPure, Category = "uBot Sensor|Odometry")
+    bool IsUsingBodyState() const { return bLatestSampleUsedBodyState; }
+
+    /** Sample time minus the time of the body state the latest sample used (how far the physics step lay behind the sample), s; 0 when it used none. */
+    UFUNCTION(BlueprintPure, Category = "uBot Sensor|Odometry")
+    double GetBodyStateAgeSeconds() const { return LatestBodyStateAgeSeconds; }
+
+private:
+    bool bLatestSampleUsedBodyState = false;
+    double LatestBodyStateAgeSeconds = 0.0;
+
+    // Mode the previous sample (PreviousWorld, PreviousTimestampSeconds) was recorded in.
+    bool bPreviousSampleInStateMode = false;
 };
