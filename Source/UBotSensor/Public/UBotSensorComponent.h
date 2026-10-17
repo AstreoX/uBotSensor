@@ -33,31 +33,31 @@ class UBOTSENSOR_API UUBotSensorComponent : public UStaticMeshComponent, public 
 public:
     UUBotSensorComponent();
 
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "uBot Sensor")
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sensor")
     FString SensorId;
 
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "uBot Sensor")
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sensor")
     FString FrameId;
 
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "uBot Sensor", meta = (ClampMin = "0.1", ClampMax = "240.0", UIMin = "0.1", UIMax = "120.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sensor", meta = (ClampMin = "0.1", ClampMax = "240.0", UIMin = "0.1", UIMax = "120.0"))
     float UpdateRateHz = 10.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "uBot Sensor")
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sensor")
     bool bAutoStart = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "uBot Sensor")
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sensor")
     bool bSensorEnabled = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "uBot Sensor|Debug")
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sensor|Debug")
     bool bDebugVisualization = false;
 
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "uBot Sensor|Model")
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sensor|Model")
     bool bHideSensorModelInGame = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "uBot Sensor|Noise")
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sensor|Noise")
     bool bNoiseEnabled = false;
 
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "uBot Sensor|Noise")
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sensor|Noise")
     int32 RandomSeed = 1337;
 
     UPROPERTY(BlueprintAssignable, Category = "uBot Sensor")
