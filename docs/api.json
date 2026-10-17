@@ -294,7 +294,7 @@
             "const": false
           },
           "default": "lidar_2d",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -462,7 +462,7 @@
             "const": false
           },
           "default": "lidar_2d",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -731,7 +731,7 @@
             "const": false
           },
           "default": "lidar_3d",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -965,7 +965,7 @@
             "const": false
           },
           "default": "lidar_3d",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -1565,7 +1565,7 @@
             "const": false
           },
           "default": "30.000000",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -1633,7 +1633,7 @@
             "const": false
           },
           "default": "depth_camera",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -1736,7 +1736,7 @@
             "const": false
           },
           "default": "depth_camera",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -2193,7 +2193,7 @@
             "const": false
           },
           "default": "imu_sensor",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -2360,7 +2360,7 @@
             "const": false
           },
           "default": "imu_sensor",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -2422,7 +2422,7 @@
             "const": false
           },
           "default": "100.000000",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -2590,7 +2590,7 @@
             "const": false
           },
           "default": "odom",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -2775,7 +2775,7 @@
             "const": false
           },
           "default": "odometry_sensor",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -2837,7 +2837,7 @@
             "const": false
           },
           "default": "30.000000",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3206,7 +3206,7 @@
             "const": false
           },
           "default": "pose_sensor",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3263,7 +3263,7 @@
             "const": false
           },
           "default": "pose_sensor",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3282,7 +3282,7 @@
             "const": false
           },
           "default": "30.000000",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3370,7 +3370,7 @@
             "const": false
           },
           "default": "rgb_camera",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3389,7 +3389,7 @@
             "const": false
           },
           "default": "rgb_camera",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3430,7 +3430,7 @@
             "const": false
           },
           "default": "",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3449,7 +3449,7 @@
             "const": false
           },
           "default": "1337",
-          "category": "uBot Sensor|Noise",
+          "category": "Sensor|Noise",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3468,7 +3468,7 @@
             "const": false
           },
           "default": "",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3487,7 +3487,7 @@
             "const": false
           },
           "default": "10.000000",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3511,7 +3511,7 @@
             "const": false
           },
           "default": "True",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3530,7 +3530,7 @@
             "const": false
           },
           "default": "False",
-          "category": "uBot Sensor|Debug",
+          "category": "Sensor|Debug",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3549,7 +3549,7 @@
             "const": false
           },
           "default": "True",
-          "category": "uBot Sensor|Model",
+          "category": "Sensor|Model",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3568,7 +3568,7 @@
             "const": false
           },
           "default": "False",
-          "category": "uBot Sensor|Noise",
+          "category": "Sensor|Noise",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
@@ -3587,7 +3587,7 @@
             "const": false
           },
           "default": "True",
-          "category": "uBot Sensor",
+          "category": "Sensor",
           "access": "readOnly",
           "editable": "anywhere",
           "tooltip": "",
