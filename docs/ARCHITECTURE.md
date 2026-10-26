@@ -25,7 +25,7 @@ uBotSensor 是 **Capability**（能力）层，只依赖 UE 引擎模块和 `UBo
 
 时间戳取自 `UBot::Clock::GetSimTimeSeconds`，基准是 `UWorld::GetTimeSeconds()`（游戏时间，遵循暂停和时间膨胀）。同步分组中的相机帧使用分组的时间戳。
 
-采样由组件 tick 驱动，不再使用循环定时器：
+默认采样由组件 tick 驱动，不再使用循环定时器；以下规则适用于旧 FrameTick 路径：
 
 - 构造函数设置 `bCanEverTick = true`、`bStartWithTickEnabled = false`、`TickGroup = TG_PostPhysics`、`bTickEvenWhenPaused = false`。tick 只在传感器运行时开启，暂停时不 tick，所以暂停期间不采样。
 - `StartSensor` 取立即样本后调用 `Scheduler.Reset(UpdateRateHz, Now + 1/UpdateRateHz)` 并开启 tick；`TickComponent` 里 `Scheduler.ConsumeDue(SimTime)` 到期才采样。
@@ -33,9 +33,11 @@ uBotSensor 是 **Capability**（能力）层，只依赖 UE 引擎模块和 `UBo
 - 运行中调用 `SetUpdateRateHz` 只改变间隔并保持相位：不重启、不取立即样本，也不重置 IMU 等的历史。
 - 子类不能把 `PrimaryComponentTick.bCanEverTick` 清掉。
 
+IMU 可显式选择 PhysicsTimeline，使用状态提供者的有限历史按固定仿真时刻批量测量。调度与执行入口分离，Core 只提供查询契约，历史由物理提供者保存；详情见[高频采样与性能](TIMING-PERFORMANCE.md)。本次开发变更新增了原生虚函数，需要统一重新编译依赖插件。
+
 ## 速度与加速度的来源
 
-Pose、Odometry 和 IMU 有两种模式（0.1.2 起）。传感器沿附着链向上找到 uBotCore 的刚体状态源（`UBot::BodyState::GetNearestBodyState`）并且 `bUseBodyState` 打开时，直接读状态里的速度和加速度（状态模式）；否则对相邻样本的位姿做差分（差分模式）。两种模式共用噪声、滤波和限幅的后处理代码，计算在 `Private/UBotSensorBodyMotion.*`。IMU 在状态模式下加上传感器相对刚体原点的杆臂项 α×r + ω×(ω×r)。帧头时间戳仍是采样时的仿真时间，状态不外推，状态的年龄由 `GetBodyStateAgeSeconds` 给出。新成员都追加在这三个类的末尾，也没有新增虚函数，已发布的 uBotROS 二进制按偏移访问这些类，因此不受影响。用户可见的规则见文档站的[读取刚体状态](https://astreox.github.io/uBotDocs/sensor/body-state/)。
+Pose、Odometry 和 IMU 有两种模式（0.1.2 起）。传感器沿附着链向上找到 uBotCore 的刚体状态源（`UBot::BodyState::GetNearestBodyState`）并且 `bUseBodyState` 打开时，直接读状态里的速度和加速度（状态模式）；否则对相邻样本的位姿做差分（差分模式）。两种模式共用噪声、滤波和限幅的后处理代码，计算在 `Private/UBotSensorBodyMotion.*`。IMU 在状态模式下加上传感器相对刚体原点的杆臂项 α×r + ω×(ω×r)。帧头时间戳仍是采样时的仿真时间，状态不外推，状态的年龄由 `GetBodyStateAgeSeconds` 给出。0.1.2 的追加成员曾保留已发布二进制的布局；本次高频历史接口增加了虚函数，开发版必须统一重新编译依赖插件。用户可见的规则见文档站的[读取刚体状态](https://astreox.github.io/uBotDocs/sensor/body-state/)。
 
 ## 相机的渲染与读回
 

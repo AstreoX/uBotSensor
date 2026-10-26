@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 
 class USceneComponent;
+struct FUBotBodyState;
 
 // Private to UBotSensor (not exported). Reads the state of the nearest provided body at or above a point
 // (UBot::BodyState, UBotCore) and maps it to the point, so Pose, Odometry and IMU share one definition of
@@ -63,6 +64,9 @@ namespace UBot::SensorBodyMotion
      * cached: a binding can come and go at any time. Out is only written when this returns Ok.
      */
     EReadResult Read(const USceneComponent& Point, FPointMotion& Out);
+
+    /** Maps an explicitly timed state through the current rigid mount, without reading the provider. */
+    void FromState(const USceneComponent& Point, const USceneComponent& Body, const FUBotBodyState& State, FPointMotion& Out);
 
     /** How far in the future (s) a state may lie and still count as describing the sample time. */
     inline constexpr double FutureStateToleranceSeconds = 1.0e-6;

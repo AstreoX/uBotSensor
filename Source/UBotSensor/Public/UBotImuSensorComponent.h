@@ -3,11 +3,19 @@
 #include "CoreMinimal.h"
 #include "Math/RandomStream.h"
 #include "UBotSensorComponent.h"
+#include "UBotBodyStateHistory.h"
 #include "UBotSensorTypes.h"
 #include "UBotTypes.h"
 #include "UBotImuSensorComponent.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUBotImuDataEvent, const FUBotImuSensorData&, Data);
+
+UENUM(BlueprintType)
+enum class EUBotImuSamplingMode : uint8
+{
+    FrameTick,
+    PhysicsTimeline
+};
 
 UCLASS(Blueprintable, ClassGroup = (uBot), meta = (BlueprintSpawnableComponent, DisplayName = "uBot IMU Sensor"))
 class UBOTSENSOR_API UUBotImuSensorComponent : public UUBotSensorComponent
@@ -80,6 +88,11 @@ public:
 protected:
     virtual bool CaptureSensorData(FUBotFrameHeader& Header, FString& OutErrorMessage) override;
     virtual void OnSamplingStarted() override;
+    virtual void OnSamplingStopped() override;
+    virtual bool CanStartSensor() const override;
+    virtual bool WantsImmediateStartupSample() const override;
+    virtual bool SampleRequested() override;
+    virtual void SampleDue(double NowSeconds) override;
 
 private:
     FVector GaussianVector(float StandardDeviation);
@@ -99,8 +112,8 @@ private:
     double PreviousTimestampSeconds = 0.0;
     int32 HistorySampleCount = 0;
 
-// Added in 0.1.2. Everything from here on follows all earlier members on purpose: released UBotROS binaries
-// access this class at compiled offsets, so new members go at the very end and no virtual function is added.
+// Historical fields remain in their original order. The timeline capability requires recompiling
+// dependent plugins; it is source/asset compatible, not a binary ABI guarantee.
 public:
     /**
      * When a body state source (a physics backend binding, a vehicle's own integrator) moves the body this
@@ -118,6 +131,26 @@ public:
     /** Sample time minus the time of the body state the latest sample used (how far the physics step lay behind the sample), s; 0 when it used none. */
     UFUNCTION(BlueprintPure, Category = "uBot Sensor|IMU")
     double GetBodyStateAgeSeconds() const { return LatestBodyStateAgeSeconds; }
+
+    /** FrameTick preserves the legacy behavior. PhysicsTimeline requires an optional provider history. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "IMU|Sampling")
+    EUBotImuSamplingMode SamplingMode = EUBotImuSamplingMode::FrameTick;
+
+    /** Lost grid times before the provider's retained history. Reset by StartSensor. */
+    UFUNCTION(BlueprintPure, Category = "uBot Sensor|IMU")
+    int64 GetTimelineHistoryDroppedSamples() const { return TimelineHistoryDrops; }
+
+    /** Requested grid times unavailable at a discontinuity. Reset by StartSensor. */
+    UFUNCTION(BlueprintPure, Category = "uBot Sensor|IMU")
+    int64 GetTimelineUnavailableSamples() const { return TimelineUnavailable; }
+
+    /** Past grid times discarded when a source or rigid mount changed without historical extrinsics. */
+    UFUNCTION(BlueprintPure, Category = "uBot Sensor|IMU")
+    int64 GetTimelineRebindDroppedSamples() const { return TimelineRebindDrops; }
+
+    /** A new source, mount, timeline generation or continuity segment invalidated measurement history. */
+    UPROPERTY(BlueprintAssignable, Category = "IMU")
+    FUBotSensorSimpleEvent OnIMUTimelineReset;
 
 private:
     /**
@@ -148,4 +181,21 @@ private:
     bool bHasDerivedBodyAccelerations = false;
     FVector DerivedBodyLinearAcceleration = FVector::ZeroVector;
     FVector DerivedBodyAngularAcceleration = FVector::ZeroVector;
+
+    int32 ProcessTimeline(int32 MaxSamples);
+    bool RefreshTimelineSource();
+    void ReleaseTimelineSource();
+    void ResetTimelineMeasurement(bool bClearPending = true);
+    TSharedPtr<const IUBotBodyStateHistory> TimelineHistory;
+    TWeakObjectPtr<UObject> TimelineSource;
+    TWeakObjectPtr<const USceneComponent> TimelineBody;
+    FTransform TimelineMount = FTransform::Identity;
+    FUBotBodyState PendingTimelineState;
+    uint64 TimelineGeneration = 0, TimelineSegment = 0;
+    double TimelineLastNow = -1.0;
+    int64 TimelineHistoryDrops = 0, TimelineUnavailable = 0;
+    int64 TimelineRebindDrops = 0;
+    uint64 TimelineBindingRevision = 0;
+    bool bHasTimelineGeneration = false, bHasTimelineSegment = false, bCapturingTimeline = false;
+    bool bProcessingTimeline = false;
 };

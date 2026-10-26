@@ -18,12 +18,13 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUBotSensorErrorEvent, const FString
  * Base class of every uBot sensor component. The component itself is the sensor frame and shows the
  * sensor model mesh.
  *
- * Sampling: StartSensor takes one immediate sample, then the component tick (TG_PostPhysics) samples
+ * Default sampling: StartSensor takes one immediate sample, then the component tick (TG_PostPhysics) samples
  * whenever the FUBotSampleScheduler says a sample is due on the UpdateRateHz grid of uBot sim time.
  * At most one sample is taken per tick; due times skipped by long frames are counted by
  * GetDroppedSampleCount instead of being sampled in a burst with identical timestamps. The tick is
  * enabled only while the sensor runs, so subclasses must not clear PrimaryComponentTick.bCanEverTick.
- * SampleSensor can still be called directly at any time (manual or externally triggered sampling).
+ * Subclasses may opt into an explicitly timed path (IMU PhysicsTimeline). SampleSensor remains
+ * the manual or externally triggered request entry point.
  */
 UCLASS(Abstract, Blueprintable, ClassGroup = (uBot), meta = (BlueprintSpawnableComponent))
 class UBOTSENSOR_API UUBotSensorComponent : public UStaticMeshComponent, public IUBotSensor
@@ -95,7 +96,7 @@ public:
     UFUNCTION(BlueprintPure, Category = "uBot Sensor")
     FUBotFrameHeader GetLatestFrameHeader() const { return LatestFrameHeader; }
 
-    /** Due samples skipped because a frame spanned more than one sample interval (reset by StartSensor). */
+    /** Scheduler grid times skipped by frame sampling or unavailable history (reset by StartSensor). */
     UFUNCTION(BlueprintPure, Category = "uBot Sensor")
     int64 GetDroppedSampleCount() const;
 
@@ -132,6 +133,13 @@ protected:
     virtual void OnSamplingStopped();
     virtual bool ShouldAutoStartSensor() const;
     virtual bool CanStartSensor() const;
+
+    /** Internal scheduling hooks. Legacy sensors keep their immediate, once-per-frame behavior. */
+    virtual bool WantsImmediateStartupSample() const { return true; }
+    virtual bool SampleRequested();
+    virtual void SampleDue(double NowSeconds);
+    bool CaptureSampleAt(double TimestampSeconds);
+    FUBotSampleScheduler& GetSampleScheduler() { return Scheduler; }
 
     FUBotFrameHeader CreateFrameHeader();
     void MarkHeader(FUBotFrameHeader& Header, EUBotSampleStatus Status, bool bValid) const;

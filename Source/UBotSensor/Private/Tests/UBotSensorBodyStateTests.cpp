@@ -1349,4 +1349,192 @@ bool FUBotSensorBodyStatePoseTest::RunTest(const FString& Parameters)
     return true;
 }
 
+namespace UBotImuTimelineTests
+{
+    // Closed-form accelerating translation and constant world yaw rate. The latest scene pose is
+    // deliberately updated only once per frame; intermediate IMU samples must use timed states.
+    class FAnalyticHistory final : public IUBotBodyStateHistory
+    {
+    public:
+        double Oldest = 0, Newest = 0;
+        double GapStart = TNumericLimits<double>::Max(), GapEnd = TNumericLimits<double>::Max();
+        bool bQueryReady = true;
+        uint64 Generation = 1;
+        virtual bool GetRange(FUBotBodyStateHistoryRange& Out) const override
+        {
+            Out = {Oldest, Newest, Generation}; return true;
+        }
+        static FUBotBodyState At(double Time)
+        {
+            FUBotBodyState S;
+            const FVector Acceleration(0.5, 0.2, 0.1);
+            S.TimestampSeconds = Time;
+            S.PositionMeters = Acceleration * (0.5 * Time * Time);
+            S.LinearVelocityMetersPerSecond = Acceleration * Time;
+            S.LinearAccelerationMetersPerSecondSquared = Acceleration;
+            S.Orientation = FQuat(FVector::UpVector, 0.7 * Time);
+            S.AngularVelocityRadiansPerSecond = FVector(0, 0, 0.7);
+            S.bHasLinearAcceleration = S.bHasAngularAcceleration = true;
+            return S;
+        }
+        virtual EUBotBodyStateQueryResult Query(double T, FUBotBodyState& Out, uint64& Segment) const override
+        {
+            if (!bQueryReady) { return EUBotBodyStateQueryResult::NotReady; }
+            if (T < Oldest) { return EUBotBodyStateQueryResult::Unavailable; }
+            if (T > Newest) { return EUBotBodyStateQueryResult::NotReady; }
+            if (T > GapStart && T < GapEnd) { return EUBotBodyStateQueryResult::Unavailable; }
+            Out = At(T); Segment = Generation + (T >= GapEnd ? 1 : 0); return EUBotBodyStateQueryResult::Exact;
+        }
+    };
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotImuTimelineAnalyticTest, "UBotSensor.IMU.Timeline.AnalyticRatesAndOrder", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUBotImuTimelineAnalyticTest::RunTest(const FString& Parameters)
+{
+    using namespace UBotSensorBodyStateTests;
+    using namespace UBotImuTimelineTests;
+    for (int32 FPS : {20, 60}) for (int32 Rate : {100, 200}) for (bool bSensorFirst : {false, true})
+    {
+        FScopedBodyStateWorld Scope;
+        FBodyRig Rig = MakeBodyRig(*Scope.Get(), false);
+        UUBotImuSensorComponent* Imu = nullptr;
+        const FVector MountCm(40, 10, 20);
+        const FQuat MountRotation(FVector::ForwardVector, 0.2);
+        if (bSensorFirst) { Imu = AddSensor<UUBotImuSensorComponent>(Rig, Rig.Body, TEXT("IMU"), MountCm, MountRotation); }
+        Rig.Source = NewObject<UUBotSensorTestStateSource>(Rig.Owner, TEXT("StateSource"));
+        Rig.Source->ProvidedBody = Rig.Body;
+        auto History = MakeShared<FAnalyticHistory>(); Rig.Source->History = History;
+        Rig.Source->RegisterComponent();
+        if (!Imu) { Imu = AddSensor<UUBotImuSensorComponent>(Rig, Rig.Body, TEXT("IMU"), MountCm, MountRotation); }
+        Imu->SamplingMode = EUBotImuSamplingMode::PhysicsTimeline;
+        Imu->SetUpdateRateHz(Rate);
+        UUBotImuTimelineRecorder* Recorder = NewObject<UUBotImuTimelineRecorder>(Rig.Owner);
+        Imu->OnImuDataUpdated.AddDynamic(Recorder, &UUBotImuTimelineRecorder::OnSample);
+        Rig.Owner->DispatchBeginPlay();
+        TestTrue(TEXT("Timeline starts with provider"), Imu->StartSensor());
+        TestEqual(TEXT("No fabricated immediate sample"), Recorder->Samples.Num(), 0);
+        for (int32 Frame = 0; Frame < FPS * 2; ++Frame)
+        {
+            History->Newest = Scope.TimeSeconds() + static_cast<double>(1.0f / FPS);
+            const FUBotBodyState State = FAnalyticHistory::At(History->Newest);
+            Rig.Body->SetWorldLocationAndRotation(State.PositionMeters * 100, State.Orientation);
+            Scope.Tick(1.0f / FPS);
+        }
+        const int32 Expected = FMath::FloorToInt(FMath::Min(Scope.TimeSeconds(), History->Newest) * Rate);
+        TestEqual(FString::Printf(TEXT("%d Hz at %d FPS order %d: count"), Rate, FPS, bSensorFirst), Recorder->Samples.Num(), Expected);
+        TestEqual(TEXT("No history losses"), Imu->GetTimelineHistoryDroppedSamples(), int64(0));
+        TestEqual(TEXT("No unavailable states"), Imu->GetTimelineUnavailableSamples(), int64(0));
+        double MaxAccelerationError = 0, MaxGyroError = 0;
+        int32 Valid = 0;
+        for (int32 Index = 0; Index < Recorder->Samples.Num(); ++Index)
+        {
+            const FUBotImuSensorData& Sample = Recorder->Samples[Index];
+            TestTrue(TEXT("Exact sample grid"), FMath::Abs(Sample.Header.TimestampSeconds - (Index + 1.0) / Rate) < 1.e-9);
+            if (!Sample.Header.bValid) { continue; }
+            ++Valid;
+            const FUBotBodyState S = FAnalyticHistory::At(Sample.Header.TimestampSeconds);
+            const FVector OffsetWorld = S.Orientation.RotateVector(MountCm / 100);
+            const FVector W(0, 0, 0.7);
+            const FQuat SensorRotation = S.Orientation * MountRotation;
+            const FVector ExpectedForce = SensorRotation.UnrotateVector(FVector(0.5, 0.2, 0.1)
+                + FVector::CrossProduct(W, FVector::CrossProduct(W, OffsetWorld)) - GravityMetersPerSecondSquared(*Scope.Get()));
+            MaxAccelerationError = FMath::Max(MaxAccelerationError, (Sample.LinearAccelerationMetersPerSecondSquared - ExpectedForce).Size());
+            MaxGyroError = FMath::Max(MaxGyroError, (Sample.AngularVelocityRadPerSecond - SensorRotation.UnrotateVector(W)).Size());
+        }
+        TestEqual(TEXT("Only initial warm-up is invalid"), Valid, Expected - 1);
+        TestTrue(TEXT("Mounted specific force agrees with analytic motion"), MaxAccelerationError < 1.e-7);
+        TestTrue(TEXT("Gyro agrees with analytic motion"), MaxGyroError < 1.e-7);
+        TestFalse(TEXT("Manual request cannot repeat a consumed time"), Imu->SampleIMU());
+        Imu->StopSensor();
+        Rig.Owner->Destroy();
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotImuTimelineSegmentsTest, "UBotSensor.IMU.Timeline.WaitingAndSegments", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUBotImuTimelineSegmentsTest::RunTest(const FString& Parameters)
+{
+    using namespace UBotSensorBodyStateTests;
+    using namespace UBotImuTimelineTests;
+    FScopedBodyStateWorld Scope;
+    FBodyRig Rig = MakeBodyRig(*Scope.Get(), true);
+    Rig.Source->RegisterComponent();
+    auto History = MakeShared<FAnalyticHistory>(); Rig.Source->History = History;
+    auto* Imu = AddSensor<UUBotImuSensorComponent>(Rig, Rig.Body, TEXT("IMU"), FVector::ZeroVector, FQuat::Identity);
+    Imu->SamplingMode = EUBotImuSamplingMode::PhysicsTimeline;
+    Imu->UpdateRateHz = 100;
+    auto* Recorder = NewObject<UUBotImuTimelineRecorder>(Rig.Owner);
+    Imu->OnImuDataUpdated.AddDynamic(Recorder, &UUBotImuTimelineRecorder::OnSample);
+    Imu->OnIMUTimelineReset.AddDynamic(Recorder, &UUBotImuTimelineRecorder::OnReset);
+    Rig.Owner->DispatchBeginPlay();
+    TestTrue(TEXT("Starts while history is not yet ready"), Imu->StartSensor());
+    History->Newest = 0.05; History->bQueryReady = false;
+    Scope.Tick(0.05f);
+    TestEqual(TEXT("No future physical state fabricated"), Recorder->Samples.Num(), 0);
+    TestFalse(TEXT("Manual request also waits"), Imu->SampleIMU());
+    TestEqual(TEXT("Waiting is not history loss"), Imu->GetDroppedSampleCount(), int64(0));
+    TestEqual(TEXT("NotReady is not counted as unavailable"), Imu->GetTimelineUnavailableSamples(), int64(0));
+    History->bQueryReady = true;
+    History->GapStart = 0.025; History->GapEnd = 0.045;
+    TestFalse(TEXT("First retained sample warms up"), Imu->SampleIMU());
+    TestTrue(TEXT("Next manual request consumes only the next due sample"), Imu->SampleIMU());
+    const int32 ResetsBeforeGap = Recorder->Resets;
+    Scope.Tick(0.001f);
+    TestEqual(TEXT("Unavailable boundary times classified"), Imu->GetTimelineUnavailableSamples(), int64(2));
+    TestEqual(TEXT("Only queryable times generate measurements"), Recorder->Samples.Num(), 3);
+    TestEqual(TEXT("First new-segment sample rewarms without bridging the gap"),
+        Recorder->Samples.Last().Header.Status, EUBotSampleStatus::WarmingUp);
+    TestEqual(TEXT("Impulse segments do not clear earlier valid FIFO data"), Recorder->Resets, ResetsBeforeGap);
+    TestFalse(TEXT("No due state is repeated"), Imu->SampleIMU());
+    Recorder->OnNextValidSample = [History]()
+    {
+        ++History->Generation;
+        History->Oldest = 0.09;
+    };
+    History->Newest = 0.1;
+    // Float frame deltas need not sum to exactly 0.1; advance past it, while the provider still
+    // exposes only completed states through 0.1. The consumer must never generate a future sample.
+    Scope.Tick(0.051f);
+    TestTrue(TEXT("Provider reset inside a sample callback clears pending data immediately"), Recorder->Resets > ResetsBeforeGap);
+    TestEqual(TEXT("New range classifies the two overwritten due times as history loss"), Imu->GetTimelineHistoryDroppedSamples(), int64(2));
+    TestTrue(TEXT("Sampling resumes within the new segment"), Imu->GetLatestIMUData().Header.bValid);
+    Imu->StopSensor();
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotImuTimelineLifecycleTest, "UBotSensor.IMU.Timeline.LifecycleAndHistoryLoss", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUBotImuTimelineLifecycleTest::RunTest(const FString& Parameters)
+{
+    using namespace UBotSensorBodyStateTests;
+    using namespace UBotImuTimelineTests;
+    FScopedBodyStateWorld Scope;
+    FBodyRig Rig = MakeBodyRig(*Scope.Get(), true);
+    Rig.Source->RegisterComponent();
+    UUBotImuSensorComponent* Imu = AddSensor<UUBotImuSensorComponent>(Rig, Rig.Body, TEXT("IMU"), FVector::ZeroVector, FQuat::Identity);
+    Imu->SamplingMode = EUBotImuSamplingMode::PhysicsTimeline;
+    TestFalse(TEXT("Unsupported provider is rejected"), Imu->StartSensor());
+    auto History = MakeShared<FAnalyticHistory>(); Rig.Source->History = History;
+    UUBotImuTimelineRecorder* Recorder = NewObject<UUBotImuTimelineRecorder>(Rig.Owner);
+    Imu->OnIMUTimelineReset.AddDynamic(Recorder, &UUBotImuTimelineRecorder::OnReset);
+    Imu->OnImuDataUpdated.AddDynamic(Recorder, &UUBotImuTimelineRecorder::OnSample);
+    Recorder->MoveSensorOnValidSample = Imu;
+    Rig.Owner->DispatchBeginPlay();
+    TestTrue(TEXT("Supported provider starts"), Imu->StartSensor());
+    History->Newest = 0.05; Scope.Tick(0.05f);
+    TestTrue(TEXT("A listener's mount change is detected inside the batch"), Imu->GetTimelineRebindDroppedSamples() > 0);
+    const int32 Before = Recorder->Resets;
+    ++History->Generation; History->Oldest = 0.09; History->Newest = 0.1;
+    Scope.Tick(0.05f);
+    TestTrue(TEXT("Provider reset is observable"), Recorder->Resets > Before);
+    TestTrue(TEXT("Expired history counted"), Imu->GetTimelineHistoryDroppedSamples() > 0);
+    const int32 BeforeMount = Recorder->Resets;
+    Imu->SetRelativeLocation(FVector(50, 0, 0));
+    History->Newest = 0.15; Scope.Tick(0.05f);
+    TestTrue(TEXT("Mount change resets measurement history"), Recorder->Resets > BeforeMount);
+    Rig.Source->ProvidedBody.Reset();
+    Scope.Tick(0.05f);
+    TestFalse(TEXT("Losing the source stops rather than fabricates data"), Imu->IsSensorRunning());
+    return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

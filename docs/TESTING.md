@@ -25,3 +25,14 @@
 ```
 
 把 `UBotSensor` 换成更具体的前缀（如 `UBotSensor.Scheduling`）可以只跑一类。UBotCore 自己的测试用 `UBotCore` 前缀。
+
+## 物理时间线与 LiDAR 执行方式
+
+- `UBotSensor.IMU.Timeline`：100/200 Hz、20/60 FPS、两种提供者/传感器注册顺序；解析加速度、角速度和偏心挂载；历史未就绪、窗口耗尽、连续段变化、回调中改变挂载以及失去提供者。
+- `UBotSensor.Lidar3D.ParallelEquivalence`：串行/并行点序、ring、强度、固定种子噪声、时间偏移与旧帧不可变性。
+- `UBotSensor.Lidar3D.ComplexMeshEquivalence`：真实三角网格移动后的逐点一致性。
+- `UBotSensor.Lidar3D.SpecialQueryFallback`：未验证的组件扩展路径和引擎查询调试绘制保持串行。
+
+`UBotSensor.Performance.LidarPipeline` 平时只输出启用说明，不运行长基准。设置环境变量 `UBOT_SENSOR_BENCH_OUTPUT` 为可写 CSV 路径后才启用；每种方式预热 10 秒、测量 60 秒，三轮交替执行。方式依次为未缓存串行、缓存串行、缓存并行；奇数轮反向执行。`UBOT_SENSOR_BENCH_LIDARS` 取 1 或 4，`UBOT_SENSOR_BENCH_TASKS` 默认 8。缩短预热或测量时间只用于检查工具，不算性能验收。
+
+原生基准隔离碰撞采集成本，不代表渲染、ROS、SLAM 或实际帧率。默认行为的决策还需要实际应用链路、CPU、内存与帧时间 P95 的配对测量。

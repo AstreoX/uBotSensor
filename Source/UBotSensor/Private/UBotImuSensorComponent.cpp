@@ -2,6 +2,8 @@
 
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "UBotBodyState.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "UBotSensorBodyMotion.h"
 #include "UBotSensorMath.h"
 #include "UBotUnits.h"
@@ -36,6 +38,7 @@ FName UUBotImuSensorComponent::GetSensorTypeName() const
 
 bool UUBotImuSensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FString& OutErrorMessage)
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(UBot_IMU_Measurement);
     namespace SensorBodyMotion = UBot::SensorBodyMotion;
 
     // Where the motion of this sample comes from. State mode: the body state source that moves this
@@ -45,7 +48,12 @@ bool UUBotImuSensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FStrin
     LatestBodyStateAgeSeconds = 0.0;
     SensorBodyMotion::FPointMotion Motion;
     SensorBodyMotion::EReadResult ReadResult = SensorBodyMotion::EReadResult::NoSource;
-    if (bUseBodyState)
+    if (bCapturingTimeline && TimelineBody.IsValid())
+    {
+        SensorBodyMotion::FromState(*this, *TimelineBody.Get(), PendingTimelineState, Motion);
+        ReadResult = SensorBodyMotion::EReadResult::Ok;
+    }
+    else if (bUseBodyState)
     {
         ReadResult = SensorBodyMotion::Read(*this, Motion);
     }
@@ -58,8 +66,8 @@ bool UUBotImuSensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FStrin
         bStateAgeValid = SensorBodyMotion::IsStateAgeAcceptable(LatestBodyStateAgeSeconds, MaxSampleDeltaSeconds);
     }
 
-    const FVector CurrentPositionMeters = UBot::Units::CentimetersToMeters(GetComponentLocation());
-    const FQuat CurrentOrientation = GetComponentQuat().GetNormalized();
+    const FVector CurrentPositionMeters = bCapturingTimeline ? Motion.PositionMeters : UBot::Units::CentimetersToMeters(GetComponentLocation());
+    const FQuat CurrentOrientation = bCapturingTimeline ? Motion.Orientation : GetComponentQuat().GetNormalized();
     LatestImuData = FUBotImuSensorData();
     LatestImuData.Header = Header;
     LatestImuData.OrientationQuaternion = bStateMode ? Motion.Orientation : CurrentOrientation;
@@ -250,6 +258,174 @@ void UUBotImuSensorComponent::OnSamplingStarted()
     RandomStream.Initialize(RandomSeed);
     ResetIMUBias();
     ResetIMUHistory();
+    TimelineHistoryDrops = TimelineUnavailable = 0;
+    TimelineRebindDrops = 0;
+    TimelineLastNow = -1.0;
+    if (SamplingMode == EUBotImuSamplingMode::PhysicsTimeline) { RefreshTimelineSource(); }
+}
+
+bool UUBotImuSensorComponent::CanStartSensor() const
+{
+    if (SamplingMode != EUBotImuSamplingMode::PhysicsTimeline) { return Super::CanStartSensor(); }
+    const USceneComponent* Body = nullptr;
+    UObject* SourceObject = UBot::BodyState::FindSourceInParents(this, Body);
+    IUBotBodyStateSource* Source = Cast<IUBotBodyStateSource>(SourceObject);
+    if (!bUseBodyState || !Source || !Source->AcquireBodyStateHistory(Body))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("%s: PhysicsTimeline IMU needs a body state history provider and Use Body State."), *GetPathName());
+        return false;
+    }
+    return true;
+}
+
+bool UUBotImuSensorComponent::WantsImmediateStartupSample() const
+{
+    return SamplingMode == EUBotImuSamplingMode::FrameTick;
+}
+
+bool UUBotImuSensorComponent::SampleRequested()
+{
+    return SamplingMode == EUBotImuSamplingMode::PhysicsTimeline ? ProcessTimeline(1) > 0 : Super::SampleRequested();
+}
+
+void UUBotImuSensorComponent::SampleDue(double NowSeconds)
+{
+    if (SamplingMode == EUBotImuSamplingMode::PhysicsTimeline) { ProcessTimeline(MAX_int32); }
+    else { Super::SampleDue(NowSeconds); }
+}
+
+void UUBotImuSensorComponent::ResetTimelineMeasurement(bool bClearPending)
+{
+    ResetIMUHistory();
+    bHasTimelineSegment = false;
+    if (bClearPending) { OnIMUTimelineReset.Broadcast(); }
+}
+
+void UUBotImuSensorComponent::ReleaseTimelineSource()
+{
+    if (UActorComponent* Component = Cast<UActorComponent>(TimelineSource.Get())) { RemoveTickPrerequisiteComponent(Component); }
+    TimelineHistory.Reset();
+    TimelineSource.Reset();
+    TimelineBody.Reset();
+    bHasTimelineGeneration = bHasTimelineSegment = false;
+}
+
+void UUBotImuSensorComponent::OnSamplingStopped()
+{
+    if (TimelineHistory) { ResetTimelineMeasurement(); }
+    ReleaseTimelineSource();
+    Super::OnSamplingStopped();
+}
+
+bool UUBotImuSensorComponent::RefreshTimelineSource()
+{
+    const USceneComponent* Body = nullptr;
+    UObject* SourceObject = UBot::BodyState::FindSourceInParents(this, Body);
+    if (!bUseBodyState || !SourceObject || !Body) { return false; }
+    const FQuat BodyRotation = Body->GetComponentQuat().GetNormalized();
+    const FTransform Mount((BodyRotation.Inverse() * GetComponentQuat()).GetNormalized(),
+        BodyRotation.UnrotateVector(GetComponentLocation() - Body->GetComponentLocation()));
+    if (TimelineSource.Get() != SourceObject || TimelineBody.Get() != Body || !TimelineHistory)
+    {
+        const bool bWasBound = TimelineHistory.IsValid();
+        ReleaseTimelineSource();
+        TimelineHistory = Cast<IUBotBodyStateSource>(SourceObject)->AcquireBodyStateHistory(Body);
+        if (!TimelineHistory) { return false; }
+        TimelineSource = SourceObject;
+        TimelineBody = Body;
+        TimelineMount = Mount;
+        ++TimelineBindingRevision;
+        if (bWasBound) { TimelineRebindDrops += GetSampleScheduler().SkipBefore(GetSensorTimestampSeconds()); }
+        if (UActorComponent* Component = Cast<UActorComponent>(SourceObject)) { AddTickPrerequisiteComponent(Component); }
+        ResetTimelineMeasurement();
+    }
+    else if (!Mount.Equals(TimelineMount, 1.e-6))
+    {
+        TimelineMount = Mount;
+        ++TimelineBindingRevision;
+        // The old mount at past due times is unknown. Do not apply new extrinsics retroactively.
+        TimelineRebindDrops += GetSampleScheduler().SkipBefore(GetSensorTimestampSeconds());
+        ResetTimelineMeasurement();
+    }
+    return true;
+}
+
+int32 UUBotImuSensorComponent::ProcessTimeline(int32 MaxSamples)
+{
+    if (bProcessingTimeline) { return 0; }
+    TGuardValue<bool> ProcessingGuard(bProcessingTimeline, true);
+    if (!IsSensorRunning() || !RefreshTimelineSource())
+    {
+        if (IsSensorRunning())
+        {
+            OnSensorError.Broadcast(TEXT("PhysicsTimeline IMU lost its history provider; sampling stopped."));
+            StopSensor();
+        }
+        return 0;
+    }
+    const double Now = GetSensorTimestampSeconds();
+    if (TimelineLastNow >= 0.0 && Now < TimelineLastNow)
+    {
+        GetSampleScheduler().Reset(UpdateRateHz, Now + 1.0 / FMath::Clamp(UpdateRateHz, 0.1f, 240.0f));
+        ResetTimelineMeasurement();
+    }
+    TimelineLastNow = Now;
+    FUBotBodyStateHistoryRange Range;
+    int32 Captured = 0, Consumed = 0;
+    const uint64 BindingRevision = TimelineBindingRevision;
+    const auto RefreshAfterCallbacks = [&]()
+    {
+        if (!IsSensorRunning()) { return false; }
+        if (!RefreshTimelineSource())
+        {
+            OnSensorError.Broadcast(TEXT("PhysicsTimeline IMU lost its history provider; sampling stopped."));
+            StopSensor();
+            return false;
+        }
+        return TimelineBindingRevision == BindingRevision;
+    };
+    double Due = 0.0;
+    // A finite retained window bounds the amount of catch-up work. No current scene is reconstructed.
+    while (Consumed < MaxSamples && IsSensorRunning() && TimelineHistory && TimelineHistory->GetRange(Range))
+    {
+        if (bHasTimelineGeneration && TimelineGeneration != Range.Generation)
+        {
+            ResetTimelineMeasurement();
+            if (!RefreshAfterCallbacks()) { break; }
+            // A reset listener may itself change provider history. Re-read before consuming a time.
+            FUBotBodyStateHistoryRange AfterReset;
+            if (!TimelineHistory->GetRange(AfterReset) || AfterReset.Generation != Range.Generation) { break; }
+            Range = AfterReset;
+        }
+        TimelineGeneration = Range.Generation;
+        bHasTimelineGeneration = true;
+        TimelineHistoryDrops += GetSampleScheduler().SkipBefore(Range.OldestSeconds);
+        Due = GetSampleScheduler().GetNextDueSeconds();
+        if (!GetSampleScheduler().IsInitialized() || Due > FMath::Min(Now, Range.NewestSeconds)) { break; }
+        uint64 Segment = 0;
+        const EUBotBodyStateQueryResult Result = TimelineHistory->Query(Due, PendingTimelineState, Segment);
+        if (Result == EUBotBodyStateQueryResult::NotReady) { break; }
+        if (!GetSampleScheduler().ConsumeNextDue(FMath::Min(Now, Range.NewestSeconds), Due)) { break; }
+        ++Consumed;
+        if (Result != EUBotBodyStateQueryResult::Exact && Result != EUBotBodyStateQueryResult::Interpolated)
+        {
+            ++TimelineUnavailable;
+            ResetTimelineMeasurement(false);
+            continue;
+        }
+        if (bHasTimelineSegment && TimelineSegment != Segment) { ResetTimelineMeasurement(false); }
+        if (!IsSensorRunning() || !TimelineHistory) { break; }
+        TimelineSegment = Segment;
+        bHasTimelineSegment = true;
+        bCapturingTimeline = true;
+        const bool bValid = CaptureSampleAt(Due);
+        bCapturingTimeline = false;
+        Captured += bValid ? 1 : 0;
+        // A sample listener can move/reparent the sensor, change its provider or stop it.
+        // Refresh before producing another historical sample with potentially different extrinsics.
+        if (!RefreshAfterCallbacks()) { break; }
+    }
+    return Captured;
 }
 
 void UUBotImuSensorComponent::ResetIMUBias()

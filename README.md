@@ -66,6 +66,7 @@ The documentation site and the files under `docs/` are in Simplified Chinese.
 | Look up every sensor and its output | [uBotSensor overview](https://astreox.github.io/uBotDocs/sensor/) |
 | Start, stop and read a sensor | [Common usage](https://astreox.github.io/uBotDocs/sensor/basics/) |
 | Choose sample rates | [Performance and sample rate](https://astreox.github.io/uBotDocs/sensor/performance/) |
+| Use opt-in physics-timeline IMU sampling and LiDAR query modes | [docs/TIMING-PERFORMANCE.md](docs/TIMING-PERFORMANCE.md) |
 | Add smoke that affects lidar and cameras | [Perception medium](https://astreox.github.io/uBotDocs/sensor/medium/) |
 | Publish sensor data to ROS 2 | [Publish sensor data](https://astreox.github.io/uBotDocs/ros/publish-sensors/) |
 | Use the sensors from C++ | [Sensors and interfaces in C++](https://astreox.github.io/uBotDocs/develop/cpp/) |

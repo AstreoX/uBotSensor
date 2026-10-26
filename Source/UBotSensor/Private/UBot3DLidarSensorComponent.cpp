@@ -1,6 +1,13 @@
 #include "UBot3DLidarSensorComponent.h"
 
 #include "CollisionQueryParams.h"
+#include "Async/ParallelFor.h"
+#include "HAL/IConsoleManager.h"
+#include "HAL/PlatformProcess.h"
+#include "Modules/ModuleManager.h"
+#include "Physics/Experimental/PhysScene_Chaos.h"
+#include "PhysicsEngine/ClusterUnionComponent.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/HitResult.h"
 #include "Engine/StaticMesh.h"
@@ -12,9 +19,20 @@
 #include "UBotSensorMath.h"
 #include "UBotSensorMedium.h"
 #include "UObject/ConstructorHelpers.h"
+#include "UObject/UObjectIterator.h"
+#if WITH_EDITOR
+#include "CollisionAnalyzerModule.h"
+#include "ICollisionAnalyzer.h"
+#endif
 
 namespace UBot3DLidarPrivate
 {
+    // Diagnostic baseline switch; no change to the sensor model or published frame layout.
+    TAutoConsoleVariable<int32> UseDirectionCache(TEXT("ubot.Sensor.Lidar.DirectionCache"), 1, TEXT("Reuse local ray directions; 0 recomputes the baseline directions each scan."));
+    // Conservative validated boundary: 32x720 passed native and full-pipeline paired gates.
+    // Small scans showed an unstable median benefit, so Auto leaves them serial.
+    TAutoConsoleVariable<int32> ParallelMinRays(TEXT("ubot.Sensor.Lidar.ParallelMinRays"), 23040, TEXT("Minimum rays for Auto parallel queries. Parallel mode bypasses this size threshold."));
+    TAutoConsoleVariable<int32> MaxQueryTasks(TEXT("ubot.Sensor.Lidar.MaxQueryTasks"), 8, TEXT("Maximum simultaneous LiDAR query blocks; avoids contending on the scene lock with one task per channel."));
     // Return strength of a surface hit: 255 when the surface faces the ray, falling to 0 at grazing
     // or back-facing incidence.
     float SurfaceIntensity(const FVector& RayDirectionWorld, const FVector& ImpactNormal)
@@ -43,6 +61,15 @@ FName UUBot3DLidarSensorComponent::GetSensorTypeName() const
 
 bool UUBot3DLidarSensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FString& OutErrorMessage)
 {
+    check(IsInGameThread());
+    TRACE_CPUPROFILER_EVENT_SCOPE(UBot_Lidar_Capture);
+    if (bCaptureInProgress)
+    {
+        OutErrorMessage = TEXT("A 3D LiDAR scan is already in progress.");
+        MarkHeader(Header, EUBotSampleStatus::Error, false);
+        return false;
+    }
+    TGuardValue<bool> CaptureGuard(bCaptureInProgress, true);
     UWorld* World = GetWorld();
     if (!World)
     {
@@ -65,6 +92,7 @@ bool UUBot3DLidarSensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FS
     }
 
     const double CaptureStartSeconds = FPlatformTime::Seconds();
+    LastTimings = FUBotLidarCaptureTimings();
     const int32 TotalRays = static_cast<int32>(TotalRays64);
     const FTransform SensorTransform = GetComponentTransform();
     const FVector Origin = SensorTransform.GetLocation();
@@ -108,27 +136,110 @@ bool UUBot3DLidarSensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FS
     NewFrame->TimeOffsetsSeconds.Reserve(TotalRays);
     NewFrame->Intensities.Reserve(TotalRays);
 
-    TArray<FVector> DebugEndPoints;
-    TArray<uint8> DebugHitFlags;
+    DebugEndPoints.Reset();
+    DebugHitFlags.Reset();
+    RayResults.SetNum(TotalRays, EAllowShrinking::No);
+    const bool bCacheDirections = UBot3DLidarPrivate::UseDirectionCache.GetValueOnGameThread() != 0;
+    if (!bCacheDirections || CachedChannels != NumberOfChannels || CachedHorizontalSamples != HorizontalSamples
+        || CachedHorizontalFov != HorizontalFovDegrees || CachedVerticalUp != VerticalFovUpDegrees || CachedVerticalDown != VerticalFovDownDegrees)
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UBot_Lidar_Directions);
+        LocalDirections.SetNumUninitialized(TotalRays, EAllowShrinking::No);
+        for (int32 Ring = 0; Ring < NumberOfChannels; ++Ring)
+        {
+            const float Vertical = UBot::SensorMath::LidarVerticalAngleDegrees(Ring, NumberOfChannels, VerticalFovDownDegrees, VerticalFovUpDegrees);
+            for (int32 Column = 0; Column < HorizontalSamples; ++Column)
+            {
+                LocalDirections[Ring * HorizontalSamples + Column] = UBot::SensorMath::LidarDirectionLocal(
+                    UBot::SensorMath::LidarHorizontalAngleDegrees(Column, HorizontalSamples, HorizontalFovDegrees), Vertical);
+            }
+        }
+        CachedChannels = NumberOfChannels; CachedHorizontalSamples = HorizontalSamples;
+        CachedHorizontalFov = HorizontalFovDegrees; CachedVerticalUp = VerticalFovUpDegrees; CachedVerticalDown = VerticalFovDownDegrees;
+    }
+    FPhysScene* Scene = World->GetPhysicsScene();
+    bool bAnalyzerRecording = false;
+#if WITH_EDITOR
+    if (FModuleManager::Get().IsModuleLoaded(TEXT("CollisionAnalyzer")))
+    {
+        if (ICollisionAnalyzer* Analyzer = FCollisionAnalyzerModule::Get()) { bAnalyzerRecording = Analyzer->IsRecording(); }
+    }
+#endif
+    bool bSafeParallelContext = Scene && Scene->GetSolver() && !Scene->GetSolver()->IsGameThreadFrozen() && !bAnalyzerRecording;
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+    // Engine scene-query debug drawing is game-thread-only. Preserve its diagnostic behavior.
+    bSafeParallelContext &= !World->DebugDrawSceneQueries(QueryParams.TraceTag);
+#endif
+    // Cluster-union extension queries use component-owned GT state. Until their equivalence is
+    // validated, retain the original serial path for such worlds, including explicit Parallel.
+    for (TObjectIterator<UClusterUnionComponent> It; bSafeParallelContext && It; ++It)
+    {
+        if (It->IsRegistered() && It->GetWorld() == World) { bSafeParallelContext = false; }
+    }
+    const int32 QueryTasks = FMath::Clamp(UBot3DLidarPrivate::MaxQueryTasks.GetValueOnGameThread(), 1, NumberOfChannels);
+    const bool bParallel = bSafeParallelContext && QueryTasks > 1 && FPlatformProcess::SupportsMultithreading() &&
+        (QueryMode == EUBotLidarQueryMode::Parallel || (QueryMode == EUBotLidarQueryMode::Auto
+            && TotalRays >= UBot3DLidarPrivate::ParallelMinRays.GetValueOnGameThread()));
+    LastTimings.bUsedParallel = bParallel;
+    LastTimings.PreparationMilliseconds = (FPlatformTime::Seconds() - CaptureStartSeconds) * 1000;
+    const double QueryStart = FPlatformTime::Seconds();
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UBot_Lidar_Queries);
+        // UE's own async traces use this same public RaycastSingle path. Each query owns its scene
+        // read lock; the joining game thread holds no outer physics lock. Worlds requiring GT
+        // component extension queries were excluded above; suppress that branch in workers.
+        FCollisionQueryParams WorkerParams = QueryParams;
+        WorkerParams.bTraceIntoSubComponents = false;
+        // This const getter can lazily normalize its component list. Finish that on the GT.
+        WorkerParams.GetIgnoredComponents();
+        const int32 Columns = HorizontalSamples;
+        const int32 Channels = NumberOfChannels;
+        const ECollisionChannel Channel = TraceChannel;
+        const FVector* Directions = LocalDirections.GetData();
+        FRayResult* Results = RayResults.GetData();
+        const auto TraceRing = [&](int32 Ring)
+        {
+            for (int32 Column = 0; Column < Columns; ++Column)
+            {
+                const int32 Index = Ring * Columns + Column;
+                FRayResult& Result = Results[Index];
+                Result.WorldDirection = SensorTransform.TransformVectorNoScale(Directions[Index]).GetSafeNormal();
+                FHitResult Hit;
+                Result.bHit = World->LineTraceSingleByChannel(Hit, Origin,
+                    Origin + Result.WorldDirection * MaximumRangeCentimeters, Channel, bParallel ? WorkerParams : QueryParams);
+                Result.DistanceCentimeters = Result.bHit ? Hit.Distance : MaximumRangeCentimeters;
+                Result.ImpactNormal = Hit.ImpactNormal;
+            }
+        };
+        if (bParallel)
+        {
+            ParallelFor(QueryTasks, [&](int32 Task)
+            {
+                const int32 First = Channels * Task / QueryTasks, End = Channels * (Task + 1) / QueryTasks;
+                for (int32 Ring = First; Ring < End; ++Ring) { TraceRing(Ring); }
+            }, EParallelForFlags::Unbalanced);
+        }
+        else { for (int32 Ring = 0; Ring < Channels; ++Ring) { TraceRing(Ring); } }
+    }
+    LastTimings.QueryMilliseconds = (FPlatformTime::Seconds() - QueryStart) * 1000;
+    const double AssemblyStart = FPlatformTime::Seconds();
+    TRACE_CPUPROFILER_EVENT_SCOPE(UBot_Lidar_AssembleAndPublish);
     const int32 DebugStride = FMath::Max(1, FMath::DivideAndRoundUp(TotalRays, 128));
     for (int32 RingIndex = 0; RingIndex < NumberOfChannels; ++RingIndex)
     {
-        const float VerticalAngle = UBot::SensorMath::LidarVerticalAngleDegrees(RingIndex, NumberOfChannels, VerticalFovDownDegrees, VerticalFovUpDegrees);
         for (int32 HorizontalIndex = 0; HorizontalIndex < HorizontalSamples; ++HorizontalIndex)
         {
             const int32 RayIndex = RingIndex * HorizontalSamples + HorizontalIndex;
-            const float HorizontalAngle = UBot::SensorMath::LidarHorizontalAngleDegrees(HorizontalIndex, HorizontalSamples, HorizontalFovDegrees);
-            const FVector LocalDirection = UBot::SensorMath::LidarDirectionLocal(HorizontalAngle, VerticalAngle);
-            const FVector WorldDirection = SensorTransform.TransformVectorNoScale(LocalDirection).GetSafeNormal();
-            const FVector TraceEnd = Origin + WorldDirection * MaximumRangeCentimeters;
-            FHitResult Hit;
-            const bool bHit = World->LineTraceSingleByChannel(Hit, Origin, TraceEnd, TraceChannel, QueryParams);
-            float RangeMeters = bHit ? Hit.Distance * 0.01f : MaximumRangeMeters;
+            const FVector& LocalDirection = LocalDirections[RayIndex];
+            const FRayResult& Result = RayResults[RayIndex];
+            const FVector& WorldDirection = Result.WorldDirection;
+            const bool bHit = Result.bHit;
+            float RangeMeters = bHit ? Result.DistanceCentimeters * 0.01f : MaximumRangeMeters;
             float SmokeDistanceCentimeters = 0.0f;
             float SmokeDensity = 0.0f;
             const bool bSmokeHit = UBot::Medium::FindFirstIntersection(
                 Origin,
-                Origin + WorldDirection * (bHit ? Hit.Distance : MaximumRangeCentimeters),
+                Origin + WorldDirection * Result.DistanceCentimeters,
                 MediumSnapshots,
                 MediumSettings.DensityThreshold,
                 SmokeDistanceCentimeters,
@@ -145,7 +256,7 @@ bool UUBot3DLidarSensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FS
             if (bValidHit)
             {
                 // Only a surface return carries an intensity; returns truncated by a medium report 0.
-                const float Intensity = (bHit && !bSmokeHit) ? UBot3DLidarPrivate::SurfaceIntensity(WorldDirection, Hit.ImpactNormal) : 0.0f;
+                const float Intensity = (bHit && !bSmokeHit) ? UBot3DLidarPrivate::SurfaceIntensity(WorldDirection, Result.ImpactNormal) : 0.0f;
                 NewFrame->PointsMeters.Add(LocalDirection * RangeMeters);
                 NewFrame->RingIndices.Add(RingIndex);
                 NewFrame->TimeOffsetsSeconds.Add(0.0f);
@@ -163,8 +274,14 @@ bool UUBot3DLidarSensorComponent::CaptureSensorData(FUBotFrameHeader& Header, FS
     NewFrame->Header = Header;
     NewFrame->HitPointCount = NewFrame->PointsMeters.Num();
     NewFrame->CaptureDurationMilliseconds = static_cast<float>((FPlatformTime::Seconds() - CaptureStartSeconds) * 1000.0);
+    LastTimings.AssemblyMilliseconds = (FPlatformTime::Seconds() - AssemblyStart) * 1000;
     LatestFrame = NewFrame;
-    On3DLidarFrameReady.Broadcast(NewFrame);
+    const double DispatchStart = FPlatformTime::Seconds();
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(UBot_Lidar_Dispatch);
+        On3DLidarFrameReady.Broadcast(NewFrame);
+    }
+    LastTimings.DispatchMilliseconds = (FPlatformTime::Seconds() - DispatchStart) * 1000;
     if (bDebugVisualization)
     {
         DrawRuntimeDebug(DebugEndPoints, DebugHitFlags);

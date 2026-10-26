@@ -17,10 +17,16 @@ namespace UBot::SensorBodyMotion
             return Body != nullptr ? EReadResult::NoState : EReadResult::NoSource;
         }
 
+        FromState(Point, *Body, State, Out);
+        return EReadResult::Ok;
+    }
+
+    void FromState(const USceneComponent& Point, const USceneComponent& Body, const FUBotBodyState& State, FPointMotion& Out)
+    {
         // Mount of the point on the body, from the current component transforms.
-        const FQuat BodyRotation = Body->GetComponentQuat().GetNormalized();
+        const FQuat BodyRotation = Body.GetComponentQuat().GetNormalized();
         const FQuat PointRotation = Point.GetComponentQuat().GetNormalized();
-        const FVector OffsetBodyMeters = UBot::Units::CentimetersToMeters(BodyRotation.UnrotateVector(Point.GetComponentLocation() - Body->GetComponentLocation()));
+        const FVector OffsetBodyMeters = UBot::Units::CentimetersToMeters(BodyRotation.UnrotateVector(Point.GetComponentLocation() - Body.GetComponentLocation()));
         const FQuat MountRotation = (BodyRotation.Inverse() * PointRotation).GetNormalized();
 
         // The mount carried along by the state.
@@ -38,6 +44,5 @@ namespace UBot::SensorBodyMotion
         Out.bHasLinearAcceleration = State.bHasLinearAcceleration;
         Out.BodyAngularAcceleration = State.AngularAccelerationRadiansPerSecondSquared;
         Out.bHasAngularAcceleration = State.bHasAngularAcceleration;
-        return EReadResult::Ok;
     }
 }

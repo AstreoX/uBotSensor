@@ -66,10 +66,7 @@ void UUBotSensorComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
         return;
     }
 
-    if (Scheduler.ConsumeDue(UBot::Clock::GetSimTimeSeconds(this)))
-    {
-        SampleSensor();
-    }
+    SampleDue(UBot::Clock::GetSimTimeSeconds(this));
 }
 
 bool UUBotSensorComponent::StartSensor()
@@ -86,7 +83,7 @@ bool UUBotSensorComponent::StartSensor()
     bSensorRunning = true;
     OnSamplingStarted();
     OnSensorStarted.Broadcast();
-    SampleSensor();
+    if (WantsImmediateStartupSample()) { SampleSensor(); }
 
     // A listener of the first sample may already have stopped the sensor again.
     if (bSensorRunning)
@@ -112,7 +109,23 @@ void UUBotSensorComponent::StopSensor()
 
 bool UUBotSensorComponent::SampleSensor()
 {
+    return SampleRequested();
+}
+
+bool UUBotSensorComponent::SampleRequested()
+{
+    return CaptureSampleAt(GetSensorTimestampSeconds());
+}
+
+void UUBotSensorComponent::SampleDue(double NowSeconds)
+{
+    if (Scheduler.ConsumeDue(NowSeconds)) { SampleSensor(); }
+}
+
+bool UUBotSensorComponent::CaptureSampleAt(double TimestampSeconds)
+{
     FUBotFrameHeader Header = CreateFrameHeader();
+    OverrideHeaderTimestamp(Header, TimestampSeconds);
     if (!bSensorEnabled)
     {
         MarkHeader(Header, EUBotSampleStatus::Disabled, false);

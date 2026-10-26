@@ -12,6 +12,26 @@ class UUBotPointCloudFrame;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUBot3DLidarFrameEvent, UUBotPointCloudFrame*, Frame);
 
+UENUM(BlueprintType)
+enum class EUBotLidarQueryMode : uint8 { Auto, Serial, Parallel };
+
+/** Native diagnostic timings. CaptureDurationMilliseconds retains its original meaning. */
+USTRUCT(BlueprintType)
+struct UBOTSENSOR_API FUBotLidarCaptureTimings
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly, Category = "Performance")
+    double PreparationMilliseconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "Performance")
+    double QueryMilliseconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "Performance")
+    double AssemblyMilliseconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "Performance")
+    double DispatchMilliseconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "Performance")
+    bool bUsedParallel = false;
+};
+
 UCLASS(Blueprintable, ClassGroup = (uBot), meta = (BlueprintSpawnableComponent, DisplayName = "uBot 3D LiDAR Sensor"))
 class UBOTSENSOR_API UUBot3DLidarSensorComponent : public UUBotSensorComponent
 {
@@ -99,6 +119,13 @@ public:
 
     virtual FName GetSensorTypeName() const override;
 
+    /** Parallel requests still fall back to serial outside a safe external-scene query context. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "3D LiDAR|Performance")
+    EUBotLidarQueryMode QueryMode = EUBotLidarQueryMode::Auto;
+
+    UFUNCTION(BlueprintPure, Category = "uBot Sensor|3D LiDAR|Performance")
+    FUBotLidarCaptureTimings GetLastCaptureTimings() const { return LastTimings; }
+
 protected:
     virtual bool CaptureSensorData(FUBotFrameHeader& Header, FString& OutErrorMessage) override;
     virtual void OnSamplingStarted() override;
@@ -110,4 +137,19 @@ private:
     TObjectPtr<UUBotPointCloudFrame> LatestFrame;
 
     FRandomStream RandomStream;
+    struct FRayResult
+    {
+        FVector WorldDirection = FVector::ZeroVector;
+        FVector ImpactNormal = FVector::ZeroVector;
+        float DistanceCentimeters = 0;
+        bool bHit = false;
+    };
+    TArray<FVector> LocalDirections;
+    TArray<FRayResult> RayResults;
+    TArray<FVector> DebugEndPoints;
+    TArray<uint8> DebugHitFlags;
+    int32 CachedChannels = 0, CachedHorizontalSamples = 0;
+    float CachedHorizontalFov = 0, CachedVerticalUp = 0, CachedVerticalDown = 0;
+    FUBotLidarCaptureTimings LastTimings;
+    bool bCaptureInProgress = false;
 };

@@ -4,6 +4,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Components/BoxComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
@@ -12,6 +14,16 @@
 #include "UBot3DLidarSensorComponent.h"
 #include "UBotPointCloudFrame.h"
 #include "UBotSensorMath.h"
+#include "HAL/IConsoleManager.h"
+#include "HAL/PlatformMemory.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
+#include "UObject/StrongObjectPtr.h"
+#include "UObject/GarbageCollection.h"
+#include "PhysicsEngine/ClusterUnionComponent.h"
 
 namespace UBotLidarTests
 {
@@ -260,6 +272,210 @@ bool FUBotSensorLidar2DIntensityRangeTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("+90 degree sample misses"), Frame->GetRangeByIndex(4, RangeMeters, bHit) && !bHit);
     TestEqual(TEXT("-90 degree miss has zero intensity"), Intensities[0], 0.0f);
     TestEqual(TEXT("+90 degree miss has zero intensity"), Intensities[4], 0.0f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotLidarParallelEquivalenceTest, "UBotSensor.Lidar3D.ParallelEquivalence", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUBotLidarParallelEquivalenceTest::RunTest(const FString& Parameters)
+{
+    using namespace UBotLidarTests;
+    FScopedLidarTestWorld Scope;
+    AActor* Wall = Scope.SpawnWall(FVector(450, 0, 0), FVector(50, 1000, 1000));
+    UUBot3DLidarSensorComponent* Lidar = Scope.SpawnLidar<UUBot3DLidarSensorComponent>();
+    Lidar->NumberOfChannels = 32; Lidar->HorizontalSamples = 720;
+    Lidar->HorizontalFovDegrees = 180; Lidar->MaximumRangeMeters = 30;
+    for (bool bNoise : {false, true}) for (bool bComplex : {false, true})
+    {
+        Lidar->bNoiseEnabled = bNoise; Lidar->RangeNoiseStdDevMeters = 0.01f;
+        Lidar->bTraceComplex = bComplex;
+        Lidar->QueryMode = EUBotLidarQueryMode::Serial;
+        TestTrue(TEXT("Serial sample"), Lidar->StartSensor());
+        TStrongObjectPtr<UUBotPointCloudFrame> Serial(Lidar->GetLatest3DLidarFrame());
+        const TArray<FVector> SavedPoints = Serial->GetPointsMeters();
+        Lidar->StopSensor();
+        Lidar->QueryMode = EUBotLidarQueryMode::Parallel;
+        TestTrue(TEXT("Parallel sample"), Lidar->StartSensor());
+        const UUBotPointCloudFrame* Parallel = Lidar->GetLatest3DLidarFrame();
+        TestTrue(TEXT("Worker path used"), Lidar->GetLastCaptureTimings().bUsedParallel);
+        TestTrue(TEXT("Point order and seeded noise identical"), Serial->GetPointsMeters() == Parallel->GetPointsMeters());
+        TestTrue(TEXT("Rings identical"), Serial->GetRingIndices() == Parallel->GetRingIndices());
+        TestTrue(TEXT("Intensities identical"), Serial->GetIntensities() == Parallel->GetIntensities());
+        TestTrue(TEXT("Snapshot time offsets identical"), Serial->GetTimeOffsetsSeconds() == Parallel->GetTimeOffsetsSeconds());
+        TestEqual(TEXT("Timestamp unchanged"), Serial->Header.TimestampSeconds, Parallel->Header.TimestampSeconds);
+        Wall->AddActorWorldOffset(FVector(10, 0, 0));
+        Lidar->Sample3DLidar();
+        TestTrue(TEXT("Published old frame is immutable"), Serial->GetPointsMeters() == SavedPoints);
+        Lidar->StopSensor();
+    }
+    Lidar->IgnoredActors.Add(Wall);
+    Lidar->Sample3DLidar();
+    TestEqual(TEXT("Ignored actors respected in workers"), Lidar->GetLatest3DLidarFrame()->GetPointCount(), 0);
+    Lidar->IgnoredActors.Reset();
+    Lidar->HorizontalSamples = 9; Lidar->NumberOfChannels = 3; Lidar->HorizontalFovDegrees = 90;
+    Lidar->Sample3DLidar();
+    TestEqual(TEXT("Configuration invalidates cached directions"), Lidar->GetLatest3DLidarFrame()->TotalRayCount, 27);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotLidarComplexMeshEquivalenceTest, "UBotSensor.Lidar3D.ComplexMeshEquivalence", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUBotLidarComplexMeshEquivalenceTest::RunTest(const FString& Parameters)
+{
+    using namespace UBotLidarTests;
+    FScopedLidarTestWorld Scope;
+    AActor* Actor = Scope.Get()->SpawnActor<AActor>();
+    auto* Mesh = NewObject<UStaticMeshComponent>(Actor);
+    auto* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+    if (!TestNotNull(TEXT("Engine mesh with triangle collision"), Cube)) { return false; }
+    Mesh->SetStaticMesh(Cube);
+    Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+    Actor->SetRootComponent(Mesh);
+    Mesh->SetWorldLocation(FVector(500,0,0));
+    Mesh->SetWorldScale3D(FVector(1,8,8));
+    Mesh->RegisterComponent();
+    auto* Lidar = Scope.SpawnLidar<UUBot3DLidarSensorComponent>();
+    Lidar->bTraceComplex = true;
+    Lidar->NumberOfChannels = 16;
+    Lidar->HorizontalSamples = 128;
+    Lidar->HorizontalFovDegrees = 120;
+    Lidar->MaximumRangeMeters = 30;
+    for (int32 Move = 0; Move < 3; ++Move)
+    {
+        Actor->AddActorWorldOffset(FVector(15,10,0));
+        Lidar->QueryMode = EUBotLidarQueryMode::Serial;
+        TestTrue(TEXT("Serial triangle scan"), Lidar->Sample3DLidar());
+        TStrongObjectPtr<UUBotPointCloudFrame> Serial(Lidar->GetLatest3DLidarFrame());
+        TestTrue(TEXT("Triangle mesh produces actual returns"), Serial->HitPointCount > 0);
+        Lidar->QueryMode = EUBotLidarQueryMode::Parallel;
+        TestTrue(TEXT("Parallel triangle scan"), Lidar->Sample3DLidar());
+        const auto* Parallel = Lidar->GetLatest3DLidarFrame();
+        TestTrue(TEXT("Triangle query executes in workers"), Lidar->GetLastCaptureTimings().bUsedParallel);
+        TestTrue(TEXT("Moving mesh preserves exact point order and values"), Serial->GetPointsMeters() == Parallel->GetPointsMeters());
+        TestTrue(TEXT("Triangle surface normals preserve intensity"), Serial->GetIntensities() == Parallel->GetIntensities());
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotLidarSpecialQueryFallbackTest, "UBotSensor.Lidar3D.SpecialQueryFallback", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUBotLidarSpecialQueryFallbackTest::RunTest(const FString& Parameters)
+{
+    using namespace UBotLidarTests;
+    FScopedLidarTestWorld Scope;
+    Scope.SpawnWall(FVector(450, 0, 0), FVector(50, 1000, 1000));
+    auto* Lidar = Scope.SpawnLidar<UUBot3DLidarSensorComponent>();
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+    Scope.Get()->bDebugDrawAllTraceTags = true;
+    Lidar->QueryMode = EUBotLidarQueryMode::Parallel;
+    TestTrue(TEXT("Engine query debug drawing still samples"), Lidar->Sample3DLidar());
+    TestFalse(TEXT("Engine query drawing retains its GT behavior"), Lidar->GetLastCaptureTimings().bUsedParallel);
+    Scope.Get()->bDebugDrawAllTraceTags = false;
+#endif
+    Lidar->NumberOfChannels = 1;
+    Lidar->QueryMode = EUBotLidarQueryMode::Parallel;
+    TestTrue(TEXT("Single-channel request still samples"), Lidar->Sample3DLidar());
+    TestFalse(TEXT("One executable block is reported as serial"), Lidar->GetLastCaptureTimings().bUsedParallel);
+    Lidar->NumberOfChannels = 16;
+    AActor* UnionActor = Scope.Get()->SpawnActor<AActor>();
+    auto* Union = NewObject<UClusterUnionComponent>(UnionActor);
+    UnionActor->SetRootComponent(Union);
+    Union->RegisterComponent();
+    Lidar->QueryMode = EUBotLidarQueryMode::Serial;
+    Lidar->Sample3DLidar();
+    const TArray<FVector> Expected = Lidar->GetLatest3DLidarFrame()->GetPointsMeters();
+    Lidar->QueryMode = EUBotLidarQueryMode::Parallel;
+    TestTrue(TEXT("Special-query world still samples"), Lidar->Sample3DLidar());
+    TestFalse(TEXT("Unvalidated component extension path retains serial queries"), Lidar->GetLastCaptureTimings().bUsedParallel);
+    TestTrue(TEXT("Fallback preserves results"), Expected == Lidar->GetLatest3DLidarFrame()->GetPointsMeters());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotLidarPerformanceTest, "UBotSensor.Performance.LidarPipeline", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUBotLidarPerformanceTest::RunTest(const FString& Parameters)
+{
+    const FString Output = FPlatformMisc::GetEnvironmentVariable(TEXT("UBOT_SENSOR_BENCH_OUTPUT"));
+    if (Output.IsEmpty()) { AddInfo(TEXT("Opt-in wall-clock benchmark: set UBOT_SENSOR_BENCH_OUTPUT.")); return true; }
+    using namespace UBotLidarTests;
+    FScopedLidarTestWorld Scope;
+    Scope.Get()->AddToRoot();
+    ON_SCOPE_EXIT { Scope.Get()->RemoveFromRoot(); };
+    // Enclosing room, columns and elevated shelves: the same geometry is retained across every A/B.
+    for (const FVector& Center : {FVector(1200,0,0), FVector(-1200,0,0), FVector(0,900,0), FVector(0,-900,0), FVector(0,0,-150), FVector(0,0,350)})
+    {
+        const FVector Extent = FMath::Abs(Center.X) > 1000 ? FVector(10,900,250) :
+            FMath::Abs(Center.Y) > 800 ? FVector(1200,10,250) : FVector(1200,900,10);
+        AActor* Box = Scope.SpawnWall(Center, Extent); Box->SetActorLocation(Center);
+    }
+    for (int32 X = -3; X <= 3; ++X) for (int32 Y = -2; Y <= 2; ++Y)
+    {
+        if (!X && !Y) { continue; }
+        Scope.SpawnWall(FVector(X*270,Y*270,0), FVector(18,18,220));
+        Scope.SpawnWall(FVector(X*270,Y*270,100), FVector(100,35,10));
+    }
+    const int32 LidarCount = FMath::Clamp(FCString::Atoi(*FPlatformMisc::GetEnvironmentVariable(TEXT("UBOT_SENSOR_BENCH_LIDARS"))), 1, 4);
+    const FString WarmEnv = FPlatformMisc::GetEnvironmentVariable(TEXT("UBOT_SENSOR_BENCH_WARMUP"));
+    const FString DurationEnv = FPlatformMisc::GetEnvironmentVariable(TEXT("UBOT_SENSOR_BENCH_SECONDS"));
+    const double Warmup = WarmEnv.IsEmpty() ? 10.0 : FCString::Atod(*WarmEnv);
+    const double Duration = DurationEnv.IsEmpty() ? 60.0 : FCString::Atod(*DurationEnv);
+    const FString SamplesEnv = FPlatformMisc::GetEnvironmentVariable(TEXT("UBOT_SENSOR_BENCH_COLUMNS"));
+    const int32 Columns = SamplesEnv.IsEmpty() ? 720 : FMath::Clamp(FCString::Atoi(*SamplesEnv), 4, 2048);
+    TArray<UUBot3DLidarSensorComponent*> Lidars;
+    for (int32 Index = 0; Index < LidarCount; ++Index)
+    {
+        auto* Lidar = Scope.SpawnLidar<UUBot3DLidarSensorComponent>();
+        Lidar->NumberOfChannels = 32; Lidar->HorizontalSamples = Columns;
+        Lidar->VerticalFovUpDegrees = Lidar->VerticalFovDownDegrees = 30;
+        Lidar->MaximumRangeMeters = 30; Lidar->bNoiseEnabled = false;
+        Lidars.Add(Lidar);
+    }
+    IConsoleVariable* Cache = IConsoleManager::Get().FindConsoleVariable(TEXT("ubot.Sensor.Lidar.DirectionCache"));
+    const int32 SavedCache = Cache->GetInt();
+    ON_SCOPE_EXIT { Cache->Set(SavedCache, ECVF_SetByCode); };
+    IConsoleVariable* Tasks = IConsoleManager::Get().FindConsoleVariable(TEXT("ubot.Sensor.Lidar.MaxQueryTasks"));
+    const int32 SavedTasks = Tasks->GetInt();
+    ON_SCOPE_EXIT { Tasks->Set(SavedTasks, ECVF_SetByCode); };
+    const FString TasksEnv = FPlatformMisc::GetEnvironmentVariable(TEXT("UBOT_SENSOR_BENCH_TASKS"));
+    const int32 RequestedTasks = TasksEnv.IsEmpty() ? SavedTasks : FMath::Clamp(FCString::Atoi(*TasksEnv), 1, 32);
+    const bool bSweep = FPlatformMisc::GetEnvironmentVariable(TEXT("UBOT_SENSOR_BENCH_SWEEP")) == TEXT("1");
+    const bool bPairedOnly = FPlatformMisc::GetEnvironmentVariable(TEXT("UBOT_SENSOR_BENCH_PAIRED_ONLY")) == TEXT("1");
+    const int32 ModeCount = bPairedOnly ? 2 : (bSweep ? 6 : 3);
+    FString CSV = TEXT("round,mode,lidars,rays,wall_seconds,capture_ms,preparation_ms,query_ms,assembly_ms,dispatch_ms,cpu_percent,working_set_bytes,parallel,query_tasks\n");
+    for (int32 Round = 0; Round < 3; ++Round)
+    {
+        for (int32 Order = 0; Order < ModeCount; ++Order)
+        {
+            const int32 Mode = (Round % 2 ? ModeCount - 1 - Order : Order) + (bPairedOnly ? 1 : 0);
+            const int32 TaskCount = bSweep && Mode >= 2 ? (4 << (Mode - 2)) : RequestedTasks;
+            Tasks->Set(TaskCount, ECVF_SetByCode);
+            Cache->Set(Mode == 0 ? 0 : 1, ECVF_SetByCode);
+            for (auto* Lidar : Lidars) { Lidar->QueryMode = Mode >= 2 ? EUBotLidarQueryMode::Parallel : EUBotLidarQueryMode::Serial; }
+            const double Start = FPlatformTime::Seconds();
+            double Next = Start;
+            int32 Frame = 0;
+            while (FPlatformTime::Seconds() - Start < Warmup + Duration)
+            {
+                const double Now = FPlatformTime::Seconds();
+                if (Now < Next) { FPlatformProcess::Sleep(static_cast<float>(Next - Now)); }
+                Next += 0.1;
+                for (auto* Lidar : Lidars)
+                {
+                    Lidar->Sample3DLidar();
+                    const double Elapsed = FPlatformTime::Seconds() - Start;
+                    if (Elapsed < Warmup) { continue; }
+#if PLATFORM_WINDOWS
+                    FPlatformTime::UpdateCPUTime(0);
+#endif
+                    const auto& T = Lidar->GetLastCaptureTimings();
+                    CSV += FString::Printf(TEXT("%d,%d,%d,%d,%.9f,%.6f,%.6f,%.6f,%.6f,%.6f,%.4f,%llu,%d,%d\n"),
+                        Round, Mode, LidarCount, 32*Columns, Elapsed, Lidar->GetLatest3DLidarFrame()->CaptureDurationMilliseconds,
+                        T.PreparationMilliseconds, T.QueryMilliseconds, T.AssemblyMilliseconds, T.DispatchMilliseconds,
+                        FPlatformTime::GetCPUTime().CPUTimePct, FPlatformMemory::GetStats().UsedPhysical, T.bUsedParallel ? 1 : 0, TaskCount);
+                }
+                // Frames are immutable UObject instances. GC is outside the measured capture scopes.
+                if (++Frame % 20 == 0) { CollectGarbage(RF_NoFlags); }
+            }
+            FFileHelper::SaveStringToFile(CSV, *Output);
+            AddInfo(FString::Printf(TEXT("Benchmark round %d mode %d complete (%d lidars, %d rays)."), Round, Mode, LidarCount, 32*Columns));
+        }
+    }
     return true;
 }
 

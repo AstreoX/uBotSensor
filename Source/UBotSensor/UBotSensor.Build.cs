@@ -13,5 +13,7 @@ public class UBotSensor : ModuleRules
             "Engine",
             "UBotCore"
         });
+        PrivateDependencyModuleNames.AddRange(new[] { "PhysicsCore", "Chaos" });
+        if (Target.bBuildEditor) { PrivateDependencyModuleNames.Add("CollisionAnalyzer"); }
     }
 }

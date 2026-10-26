@@ -64,6 +64,7 @@ git clone --branch v0.1.1 https://github.com/AstreoX/uBotSensor.git
 | 查阅各传感器及其输出 | [uBotSensor 概述](https://astreox.github.io/uBotDocs/sensor/) |
 | 启动、停止和读取传感器 | [传感器通用用法](https://astreox.github.io/uBotDocs/sensor/basics/) |
 | 选择采样频率 | [性能与采样频率](https://astreox.github.io/uBotDocs/sensor/performance/) |
+| 使用高频 IMU 与 LiDAR 查询模式 | [docs/TIMING-PERFORMANCE.md](docs/TIMING-PERFORMANCE.md) |
 | 添加影响激光雷达和相机的烟雾 | [感知介质（烟雾干扰）](https://astreox.github.io/uBotDocs/sensor/medium/) |
 | 把传感器数据发布到 ROS 2 | [发布传感器数据](https://astreox.github.io/uBotDocs/ros/publish-sensors/) |
 | 在 C++ 中使用传感器 | [在 C++ 中使用传感器与接口](https://astreox.github.io/uBotDocs/develop/cpp/) |
