@@ -84,10 +84,9 @@ namespace UBot::SensorMedium
         TArray<uint8>& PixelBytes);
 
     /**
-     * Replaces every depth value (meters, 0 = invalid) whose ray enters a medium before the measured
-     * surface by the medium entry distance, or by 0 when that distance is outside
-     * [MinimumDepthMeters, MaximumDepthMeters].
-     * Numerically identical to the legacy ApplySmokeToDepthValues for equivalent input.
+     * Replaces every depth value (camera-local X in meters, 0 = invalid) whose ray enters a medium
+     * before the measured surface by the medium entry's axial depth, or by 0 when that axial depth
+     * is outside [MinimumDepthMeters, MaximumDepthMeters].
      */
     UBOTSENSOR_API void ApplyToDepthValues(
         const FTransform& SensorTransform,

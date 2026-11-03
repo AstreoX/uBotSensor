@@ -42,6 +42,12 @@ uBotSensor 为 Actor 提供仿真传感器：位姿、里程计、IMU、2D / 3D 
 | `uBot Depth Camera Sensor` | `Depth32FC1` 深度图（m），0 表示无效 | 30 Hz |
 | 感知介质（烟雾） | 截断激光雷达射线，给 RGB 图像染色，把深度改为入口距离 | — |
 
+### 当前源码的行为与兼容性
+
+深度图保存轴向深度（相机本地 X），介质入口和量程判断也遵循这一约定。离轴像素查询介质时，先把轴向深度换算为射线长度，再把交点投影回轴向深度，随后据此生成点云。
+
+IMU 测量噪声采用高斯样本，方差为 `NoiseStdDev²`；偏置随机游走每步增量的方差为 `BiasRandomWalkStdDev² × 采样间隔`。当前源码复用共享的 Box–Muller 工具，修正旧生成器方差减半的问题。因此，非零 IMU 噪声或随机游走的固定种子序列会与早期版本不同；在当前实现中，相同种子和采样序列仍可重复。属性、资产默认值和默认零噪声输出保持不变。这些源码变更尚未发布。
+
 ## 安装
 
 **推荐：uBot Manager。** 从 [uBotManager 的 Releases 页面](https://github.com/AstreoX/uBotManager/releases)下载安装包，打开工程的 `.uproject`，在 **Package** 视图中选中 `UBotSensor`，依次点击 **安装** 和 **应用…**。uBotCore 作为依赖一并安装，插件位于 `Plugins/uBot/`。
