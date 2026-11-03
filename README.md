@@ -42,6 +42,12 @@ uBotSensor provides simulated sensors for Actors: pose, odometry, IMU, 2D and 3D
 | `uBot Depth Camera Sensor` | `Depth32FC1` depth in meters, 0 means invalid | 30 Hz |
 | Perception medium (smoke) | Stops lidar rays, tints RGB images, sets depth to the entry distance | — |
 
+### Current source behavior and compatibility
+
+Depth images store axial depth (camera-local X), including medium entry points and measurement limits. Off-axis medium queries convert axial depth to ray distance and project the intersection back to axial depth before point-cloud reconstruction.
+
+IMU measurement noise uses Gaussian samples with variance `NoiseStdDev²`; each bias random-walk increment has variance `BiasRandomWalkStdDev² × sample interval`. The current source corrects the former generator's half-sized variance by using the shared Box–Muller helper. Nonzero IMU noise or random walk therefore produces a different fixed-seed sequence from earlier versions; the same seed and sampling sequence remain repeatable within this implementation. Properties, asset defaults and the default zero-noise output are unchanged. These source changes have not been released.
+
 ## Install
 
 **Recommended: uBot Manager.** Download the installer from the [uBotManager releases](https://github.com/AstreoX/uBotManager/releases), open the project's `.uproject`, select `UBotSensor` in the **Packages** view, click **Install**, then **Apply…**. uBotCore is installed as a dependency; the plugin goes into `Plugins/uBot/`.
