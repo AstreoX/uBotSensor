@@ -466,21 +466,28 @@ namespace UBot::SensorMedium
             {
                 const int32 Index = Y * Width + X;
                 const float ExistingDepthMeters = DepthValuesMeters[Index];
-                const float SegmentMaxMeters = ExistingDepthMeters > 0.0f
+                const float SegmentMaxDepthMeters = ExistingDepthMeters > 0.0f
                     ? FMath::Min(ExistingDepthMeters, MaximumDepthMeters)
                     : MaximumDepthMeters;
-                if (SegmentMaxMeters <= MinimumDepthMeters)
+                if (SegmentMaxDepthMeters <= MinimumDepthMeters)
                 {
                     continue;
                 }
 
                 const FVector LocalDirection = CameraPixelDirectionLocal(X, Y, Fx, Fy, Cx, Cy);
+                // SceneDepth and the point-cloud projection use camera-local X (axial depth).
+                // Intersection queries instead measure distance along the normalized pixel ray.
+                const double AxialScale = LocalDirection.X;
+                if (AxialScale <= UE_DOUBLE_SMALL_NUMBER)
+                {
+                    continue;
+                }
                 const FVector WorldDirection = SensorTransform.TransformVectorNoScale(LocalDirection).GetSafeNormal();
                 float MediumDistanceCentimeters = 0.0f;
                 float MediumDensity = 0.0f;
                 if (!UBot::Medium::FindFirstIntersection(
                         Origin,
-                        Origin + WorldDirection * SegmentMaxMeters * 100.0f,
+                        Origin + WorldDirection * (SegmentMaxDepthMeters * 100.0 / AxialScale),
                         Snapshots,
                         Settings.DensityThreshold,
                         MediumDistanceCentimeters,
@@ -489,9 +496,9 @@ namespace UBot::SensorMedium
                     continue;
                 }
 
-                const float MediumDistanceMeters = MediumDistanceCentimeters * 0.01f;
-                DepthValuesMeters[Index] = MediumDistanceMeters >= MinimumDepthMeters && MediumDistanceMeters <= MaximumDepthMeters
-                    ? MediumDistanceMeters
+                const float MediumDepthMeters = static_cast<float>(MediumDistanceCentimeters * 0.01 * AxialScale);
+                DepthValuesMeters[Index] = MediumDepthMeters >= MinimumDepthMeters && MediumDepthMeters <= MaximumDepthMeters
+                    ? MediumDepthMeters
                     : 0.0f;
             }
         }

@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "Math/RandomStream.h"
 #include "UBotPerceptionMedium.h"
+#include "UBotSensorMath.h"
 #include "UBotSensorMedium.h"
 #include "UBotSensorMediumTestTypes.h"
 
@@ -308,63 +309,6 @@ namespace UBotSensorMediumTests
                 }
             }
         }
-
-        void ApplySmokeToDepthValues(
-            const FTransform& SensorTransform,
-            int32 Width,
-            int32 Height,
-            float Fx,
-            float Fy,
-            float Cx,
-            float Cy,
-            float MinimumDepthMeters,
-            float MaximumDepthMeters,
-            const TArray<FSmokeField>& Fields,
-            float DensityThreshold,
-            TArray<float>& DepthValuesMeters)
-        {
-            if (Fields.IsEmpty() || Width <= 0 || Height <= 0 || DepthValuesMeters.Num() != Width * Height || MaximumDepthMeters <= MinimumDepthMeters)
-            {
-                return;
-            }
-
-            const FVector Origin = SensorTransform.GetLocation();
-            for (int32 Y = 0; Y < Height; ++Y)
-            {
-                for (int32 X = 0; X < Width; ++X)
-                {
-                    const int32 Index = Y * Width + X;
-                    const float ExistingDepthMeters = DepthValuesMeters[Index];
-                    const float SegmentMaxMeters = ExistingDepthMeters > 0.0f
-                        ? FMath::Min(ExistingDepthMeters, MaximumDepthMeters)
-                        : MaximumDepthMeters;
-                    if (SegmentMaxMeters <= MinimumDepthMeters)
-                    {
-                        continue;
-                    }
-
-                    const FVector LocalDirection = CameraPixelDirectionLocal(X, Y, Fx, Fy, Cx, Cy);
-                    const FVector WorldDirection = SensorTransform.TransformVectorNoScale(LocalDirection).GetSafeNormal();
-                    float SmokeDistanceCentimeters = 0.0f;
-                    float SmokeDensity = 0.0f;
-                    if (!FindFirstSmokeIntersection(
-                            Origin,
-                            Origin + WorldDirection * SegmentMaxMeters * 100.0f,
-                            Fields,
-                            DensityThreshold,
-                            SmokeDistanceCentimeters,
-                            SmokeDensity))
-                    {
-                        continue;
-                    }
-
-                    const float SmokeDistanceMeters = SmokeDistanceCentimeters * 0.01f;
-                    DepthValuesMeters[Index] = SmokeDistanceMeters >= MinimumDepthMeters && SmokeDistanceMeters <= MaximumDepthMeters
-                        ? SmokeDistanceMeters
-                        : 0.0f;
-                }
-            }
-        }
     }
 }
 
@@ -457,6 +401,80 @@ bool FUBotSensorMediumCameraReadbackAppliesSmokeTest::RunTest(const FString& Par
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotSensorMediumDepthOffAxisIntersectionTest, "UBotSensor.Medium.DepthOffAxisIntersection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUBotSensorMediumDepthOffAxisIntersectionTest::RunTest(const FString& Parameters)
+{
+    using namespace UBotSensorMediumTests;
+
+    // Pixel (0, 0) has direction (1/2, sqrt(3)/2, 0), i.e. 60 degrees off the optical axis.
+    // A sphere of radius 1 m at 16 m along that ray starts at 15 m range / 7.5 m axial depth.
+    // Both an existing surface at X = 10 m and an invalid pixel with a 10 m limit must see it.
+    const double SqrtThree = FMath::Sqrt(3.0);
+    const float Cx = static_cast<float>(-SqrtThree);
+    UBot::SensorMedium::FQuerySettings Settings;
+    Settings.DensityThreshold = 0.1f;
+    const FTransform Transforms[] = {
+        FTransform::Identity,
+        FTransform(FRotator(20.0, 35.0, -12.0), FVector(150.0, -70.0, 90.0))
+    };
+    for (const FTransform& Transform : Transforms)
+    {
+        TArray<FUBotMediumSnapshot> Snapshots = {
+            MakeSnapshot({ MakeCell(Transform.TransformPosition(FVector(800.0, 800.0 * SqrtThree, 0.0)), 100.0f, 1.0f) })
+        };
+        for (const float ExistingDepth : {10.0f, 0.0f})
+        {
+            TArray<float> Depths = {ExistingDepth};
+            UBot::SensorMedium::ApplyToDepthValues(Transform, 1, 1, 1.0f, 1.0f, Cx, 0.0f,
+                0.1f, 10.0f, Snapshots, Settings, Depths);
+            TestTrue(TEXT("Off-axis medium before the surface or maximum axial depth is detected"),
+                FMath::IsNearlyEqual(Depths[0], 7.5f, 1.e-4f));
+        }
+
+        // Entry at 10.5 m axial depth is beyond both the surface and the configured maximum.
+        Snapshots = { MakeSnapshot({ MakeCell(Transform.TransformPosition(FVector(1100.0, 1100.0 * SqrtThree, 0.0)), 100.0f, 1.0f) }) };
+        for (const float ExistingDepth : {10.0f, 0.0f})
+        {
+            TArray<float> Depths = {ExistingDepth};
+            UBot::SensorMedium::ApplyToDepthValues(Transform, 1, 1, 1.0f, 1.0f, Cx, 0.0f,
+                0.1f, 10.0f, Snapshots, Settings, Depths);
+            TestEqual(TEXT("Medium beyond the axial surface or range limit leaves the depth unchanged"), Depths[0], ExistingDepth);
+        }
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotSensorMediumDepthAxialWritebackTest, "UBotSensor.Medium.DepthAxialWriteback", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUBotSensorMediumDepthAxialWritebackTest::RunTest(const FString& Parameters)
+{
+    using namespace UBotSensorMediumTests;
+
+    // Sphere center: 9 m along the same 60-degree ray, radius: 1 m.
+    // The entry point is analytically (4, 4 sqrt(3), 0) m; its range is 8 m.
+    const double SqrtThree = FMath::Sqrt(3.0);
+    const float Cx = static_cast<float>(-SqrtThree);
+    const TArray<FUBotMediumSnapshot> Snapshots = {
+        MakeSnapshot({ MakeCell(FVector(450.0, 450.0 * SqrtThree, 0.0), 100.0f, 1.0f) })
+    };
+    UBot::SensorMedium::FQuerySettings Settings;
+    TArray<float> Depths = {10.0f};
+    UBot::SensorMedium::ApplyToDepthValues(FTransform::Identity, 1, 1, 1.0f, 1.0f, Cx, 0.0f,
+        0.1f, 5.0f, Snapshots, Settings, Depths);
+    TestTrue(TEXT("Entry inside the axial maximum is written as X = 4 m, even when its range exceeds the maximum"),
+        FMath::IsNearlyEqual(Depths[0], 4.0f, 1.e-4f));
+    const FVector Point = UBot::SensorMath::DepthPixelToPointMeters(0, 0, Depths[0], 1.0f, 1.0f, Cx, 0.0f);
+    TestTrue(TEXT("Point-cloud reconstruction reaches the actual medium entry point"),
+        Point.Equals(FVector(4.0, 4.0 * SqrtThree, 0.0), 2.e-4));
+
+    Depths = {10.0f};
+    UBot::SensorMedium::ApplyToDepthValues(FTransform::Identity, 1, 1, 1.0f, 1.0f, Cx, 0.0f,
+        4.5f, 10.0f, Snapshots, Settings, Depths);
+    TestEqual(TEXT("Entry below the axial minimum is invalid, even when its range exceeds the minimum"), Depths[0], 0.0f);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotSensorMediumMatchesLegacyMathTest, "UBotSensor.Medium.MatchesLegacyMath", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FUBotSensorMediumMatchesLegacyMathTest::RunTest(const FString& Parameters)
@@ -545,34 +563,6 @@ bool FUBotSensorMediumMatchesLegacyMathTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("The scene blends a meaningful part of the image"), ChangedPixels > Width * Height / 20);
     TestEqual(TEXT("BGRA output matches the legacy implementation"), MismatchedBytes, 0);
 
-    TArray<float> SourceDepths;
-    SourceDepths.SetNumUninitialized(Width * Height);
-    for (float& Depth : SourceDepths)
-    {
-        Depth = Stream.FRand() < 0.1f ? 0.0f : Stream.FRandRange(0.2f, 18.0f);
-    }
-
-    TArray<float> ExpectedDepths = SourceDepths;
-    LegacyOracle::ApplySmokeToDepthValues(SensorTransform, Width, Height, Fx, Fy, Cx, Cy, 0.1f, 15.0f, Fields, CameraSettings.DensityThreshold, ExpectedDepths);
-    TArray<float> ActualDepths = SourceDepths;
-    UBot::SensorMedium::ApplyToDepthValues(SensorTransform, Width, Height, Fx, Fy, Cx, Cy, 0.1f, 15.0f, Snapshots, CameraSettings, ActualDepths);
-
-    int32 ChangedDepths = 0;
-    int32 MismatchedDepths = 0;
-    for (int32 Index = 0; Index < ExpectedDepths.Num(); ++Index)
-    {
-        ChangedDepths += ExpectedDepths[Index] != SourceDepths[Index] ? 1 : 0;
-        if (!FMath::IsNearlyEqual(ExpectedDepths[Index], ActualDepths[Index], 1.0e-4f))
-        {
-            if (MismatchedDepths == 0)
-            {
-                AddError(FString::Printf(TEXT("First depth mismatch at pixel %d: legacy %.6f m, port %.6f m"), Index, ExpectedDepths[Index], ActualDepths[Index]));
-            }
-            ++MismatchedDepths;
-        }
-    }
-    TestTrue(TEXT("The scene changes a meaningful part of the depth image"), ChangedDepths > Width * Height / 20);
-    TestEqual(TEXT("Depth output matches the legacy implementation"), MismatchedDepths, 0);
     return true;
 }
 
