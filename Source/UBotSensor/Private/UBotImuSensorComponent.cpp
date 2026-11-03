@@ -457,14 +457,7 @@ void UUBotImuSensorComponent::ResetIMUHistory()
 
 FVector UUBotImuSensorComponent::GaussianVector(float StandardDeviation)
 {
-    if (StandardDeviation <= 0.0f)
-    {
-        return FVector::ZeroVector;
-    }
-    return FVector(
-        RandomStream.GetFraction() + RandomStream.GetFraction() + RandomStream.GetFraction() - 1.5f,
-        RandomStream.GetFraction() + RandomStream.GetFraction() + RandomStream.GetFraction() - 1.5f,
-        RandomStream.GetFraction() + RandomStream.GetFraction() + RandomStream.GetFraction() - 1.5f) * (StandardDeviation * 1.41421356f);
+    return UBot::SensorMath::GaussianVector(RandomStream, StandardDeviation);
 }
 
 FVector UUBotImuSensorComponent::ApplyLowPass(const FVector& Input, const FVector& PreviousOutput, double DeltaSeconds) const

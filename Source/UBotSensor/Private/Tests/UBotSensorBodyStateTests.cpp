@@ -14,6 +14,7 @@
 #include "UBotOdometrySensorComponent.h"
 #include "UBotPoseSensorComponent.h"
 #include "UBotSensorBodyStateTestTypes.h"
+#include "UBotSensorMath.h"
 #include "UBotSensorTypes.h"
 #include "UBotTypes.h"
 #include "UBotUnits.h"
@@ -372,7 +373,7 @@ namespace UBotSensorBodyStateTests
     }
 
     // Reference for the shared post-processing of an IMU sample (bias random walk, noise, low-pass, clamp),
-    // written out independently of the component: the random draws come in the order bias walk
+    // using the shared Gaussian helper: the random draws come in the order bias walk
     // (accelerometer, gyroscope), accelerometer noise, gyroscope noise; the random walk and the filter use the
     // interval between the sample headers.
     class FImuPostProcessReference
@@ -415,14 +416,7 @@ namespace UBotSensorBodyStateTests
     private:
         FVector Gaussian(float StandardDeviation)
         {
-            if (StandardDeviation <= 0.0f)
-            {
-                return FVector::ZeroVector;
-            }
-            return FVector(
-                Stream.GetFraction() + Stream.GetFraction() + Stream.GetFraction() - 1.5f,
-                Stream.GetFraction() + Stream.GetFraction() + Stream.GetFraction() - 1.5f,
-                Stream.GetFraction() + Stream.GetFraction() + Stream.GetFraction() - 1.5f) * (StandardDeviation * 1.41421356f);
+            return UBot::SensorMath::GaussianVector(Stream, StandardDeviation);
         }
 
         const UUBotImuSensorComponent& Imu;
@@ -1003,6 +997,167 @@ bool FUBotSensorBodyStateImuNoiseTest::RunTest(const FString& Parameters)
 
     Rig.Owner->Destroy();
     return true;
+}
+
+namespace UBotImuNoiseStatisticsTests
+{
+    struct FAxisMoments
+    {
+        int32 Count = 0;
+        FVector Mean = FVector::ZeroVector;
+        FVector SquaredDeviationSum = FVector::ZeroVector;
+
+        void Add(const FVector& Value)
+        {
+            ++Count;
+            // Welford's sample moments: no reference random generator is involved.
+            for (int32 Axis = 0; Axis < 3; ++Axis)
+            {
+                const double Delta = Value[Axis] - Mean[Axis];
+                Mean[Axis] += Delta / Count;
+                SquaredDeviationSum[Axis] += Delta * (Value[Axis] - Mean[Axis]);
+            }
+        }
+
+        void Check(FAutomationTestBase& Test, const FString& Context, double StandardDeviation) const
+        {
+            if (!Test.TestEqual(Context + TEXT(": sample count"), Count, 16384))
+            {
+                return;
+            }
+            const double ExpectedVariance = StandardDeviation * StandardDeviation;
+            // Gaussian mean SE = sigma/sqrt(N), variance relative SE = sqrt(2/(N-1)).
+            // Six mean SE and 8% variance error (> 7 variance SE at N = 16384) keep this
+            // fixed-seed test robust while decisively rejecting the old factor-of-two error.
+            const double MeanTolerance = 6.0 * StandardDeviation / FMath::Sqrt(static_cast<double>(Count));
+            for (int32 Axis = 0; Axis < 3; ++Axis)
+            {
+                const double Variance = SquaredDeviationSum[Axis] / (Count - 1);
+                Test.TestTrue(FString::Printf(TEXT("%s axis %d: zero mean (got %g, tolerance %g)"),
+                    *Context, Axis, Mean[Axis], MeanTolerance), FMath::Abs(Mean[Axis]) <= MeanTolerance);
+                Test.TestTrue(FString::Printf(TEXT("%s axis %d: variance follows configured sigma squared (got %g, expected %g)"),
+                    *Context, Axis, Variance, ExpectedVariance), FMath::Abs(Variance - ExpectedVariance) <= 0.08 * ExpectedVariance);
+            }
+        }
+    };
+
+    bool CheckStationaryImuStatistics(FAutomationTestBase& Test, bool bRandomWalk)
+    {
+        using namespace UBotSensorBodyStateTests;
+        FScopedBodyStateWorld Scope;
+        if (!Test.TestNotNull(TEXT("Test world"), Scope.Get()))
+        {
+            return false;
+        }
+        FBodyRig Rig = MakeBodyRig(*Scope.Get(), true);
+        if (!Test.TestNotNull(TEXT("Body"), Rig.Body))
+        {
+            return false;
+        }
+        Rig.Source->State.bHasLinearAcceleration = true;
+        Rig.Source->State.bHasAngularAcceleration = true;
+        Rig.Source->RegisterComponent();
+
+        const float AccelerationSigma = bRandomWalk ? 0.02f : 0.05f;
+        const float GyroscopeSigma = bRandomWalk ? 0.004f : 0.01f;
+        UUBotImuSensorComponent* Sensors[2];
+        FAxisMoments AccelerationMoments[2];
+        FAxisMoments GyroscopeMoments[2];
+        FVector PreviousAcceleration[2] = {FVector::ZeroVector, FVector::ZeroVector};
+        FVector PreviousGyroscope[2] = {FVector::ZeroVector, FVector::ZeroVector};
+        double PreviousTime[2] = {0.0, 0.0};
+        bool bHasPrevious[2] = {false, false};
+        for (int32 Mode = 0; Mode < 2; ++Mode)
+        {
+            auto* Imu = AddSensor<UUBotImuSensorComponent>(Rig, Rig.Body,
+                Mode == 0 ? TEXT("StateStatistics") : TEXT("DifferenceStatistics"), FVector::ZeroVector, FQuat::Identity);
+            Imu->bUseBodyState = Mode == 0;
+            Imu->bNoiseEnabled = true;
+            Imu->RandomSeed = 20261104;
+            Imu->bLowPassFilterEnabled = false;
+            Imu->bClampOutput = false;
+            Imu->AccelerometerBias = FVector::ZeroVector;
+            Imu->GyroscopeBias = FVector::ZeroVector;
+            Imu->AccelerometerNoiseStdDev = bRandomWalk ? 0.0f : AccelerationSigma;
+            Imu->GyroscopeNoiseStdDev = bRandomWalk ? 0.0f : GyroscopeSigma;
+            Imu->AccelerometerBiasRandomWalkStdDev = bRandomWalk ? AccelerationSigma : 0.0f;
+            Imu->GyroscopeBiasRandomWalkStdDev = bRandomWalk ? GyroscopeSigma : 0.0f;
+            Sensors[Mode] = Imu;
+        }
+        Rig.Owner->DispatchBeginPlay();
+        for (auto* Imu : Sensors)
+        {
+            StartForManualSampling(Test, *Imu, TEXT("Statistical IMU"));
+        }
+
+        const FVector StationarySpecificForce = -GravityMetersPerSecondSquared(*Scope.Get());
+        int32 InvalidSamples = 0;
+        for (int32 Step = 1; Step <= 16386; ++Step)
+        {
+            // Vary dt to verify the walk uses q^2 * dt, rather than a fixed interval.
+            Scope.Tick(Step % 2 == 0 ? FrameSeconds : SlowFrameSeconds);
+            Rig.Source->State.TimestampSeconds = Scope.TimeSeconds();
+            for (int32 Mode = 0; Mode < 2; ++Mode)
+            {
+                auto* Imu = Sensors[Mode];
+                Imu->SampleSensor();
+                const FUBotImuSensorData Data = Imu->GetLatestIMUData();
+                if (!Data.Header.bValid)
+                {
+                    // Difference mode requires one more warm-up after the start sample.
+                    InvalidSamples += Mode == 1 && Step == 1 && Data.Header.Status == EUBotSampleStatus::WarmingUp ? 0 : 1;
+                    continue;
+                }
+                FVector Acceleration = Data.LinearAccelerationMetersPerSecondSquared - StationarySpecificForce;
+                FVector Gyroscope = Data.AngularVelocityRadPerSecond;
+                const FVector CurrentAcceleration = Acceleration;
+                const FVector CurrentGyroscope = Gyroscope;
+                if (bRandomWalk && bHasPrevious[Mode])
+                {
+                    const double SqrtInterval = FMath::Sqrt(Data.Header.TimestampSeconds - PreviousTime[Mode]);
+                    Acceleration = (Acceleration - PreviousAcceleration[Mode]) / SqrtInterval;
+                    Gyroscope = (Gyroscope - PreviousGyroscope[Mode]) / SqrtInterval;
+                }
+                if ((!bRandomWalk || bHasPrevious[Mode]) && AccelerationMoments[Mode].Count < 16384)
+                {
+                    AccelerationMoments[Mode].Add(Acceleration);
+                    GyroscopeMoments[Mode].Add(Gyroscope);
+                }
+                PreviousAcceleration[Mode] = CurrentAcceleration;
+                PreviousGyroscope[Mode] = CurrentGyroscope;
+                PreviousTime[Mode] = Data.Header.TimestampSeconds;
+                bHasPrevious[Mode] = true;
+            }
+        }
+        Test.TestEqual(TEXT("Every statistical sample after the expected warm-up is valid"), InvalidSamples, 0);
+        for (int32 Mode = 0; Mode < 2; ++Mode)
+        {
+            const FString Context = Mode == 0 ? TEXT("State mode") : TEXT("Difference mode");
+            AccelerationMoments[Mode].Check(Test, Context + TEXT(" accelerometer"), AccelerationSigma);
+            GyroscopeMoments[Mode].Check(Test, Context + TEXT(" gyroscope"), GyroscopeSigma);
+            const FUBotImuSensorData Data = Sensors[Mode]->GetLatestIMUData();
+            Test.TestTrue(Context + TEXT(": reported acceleration variance matches measurement configuration"),
+                Data.LinearAccelerationVariance.Equals(FVector(FMath::Square(Sensors[Mode]->AccelerometerNoiseStdDev)), 1.e-9));
+            Test.TestTrue(Context + TEXT(": reported gyro variance matches measurement configuration"),
+                Data.AngularVelocityVariance.Equals(FVector(FMath::Square(Sensors[Mode]->GyroscopeNoiseStdDev)), 1.e-9));
+        }
+        Rig.Owner->Destroy();
+        return true;
+    }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotSensorImuNoiseVarianceTest, "UBotSensor.IMU.Noise.MeasurementVariance", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUBotSensorImuNoiseVarianceTest::RunTest(const FString& Parameters)
+{
+    return UBotImuNoiseStatisticsTests::CheckStationaryImuStatistics(*this, false);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotSensorImuBiasWalkVarianceTest, "UBotSensor.IMU.Noise.BiasWalkIncrementVariance", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUBotSensorImuBiasWalkVarianceTest::RunTest(const FString& Parameters)
+{
+    return UBotImuNoiseStatisticsTests::CheckStationaryImuStatistics(*this, true);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUBotSensorBodyStateOdometryTest, "UBotSensor.BodyState.Odometry", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
