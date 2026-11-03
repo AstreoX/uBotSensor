@@ -1,6 +1,6 @@
 # 高频 IMU 与 3D LiDAR 执行方式
 
-本页描述未发布的源码变更。请统一重新编译 Core、状态提供者、Sensor 和 ROS；资产仍可加载，旧 DLL 不保证兼容。
+本页描述未发布的 uBotSensor 0.1.3，依赖 uBotCore 0.1.4；发布到 ROS 时使用配套的 uBotROS 0.1.4。请统一重新编译 Core、状态提供者、Sensor 和 ROS；资产仍可加载，旧 DLL 不保证兼容。
 
 ## IMU
 
