@@ -48,6 +48,8 @@ Depth images store axial depth (camera-local X), including medium entry points a
 
 IMU measurement noise uses Gaussian samples with variance `NoiseStdDev²`; each bias random-walk increment has variance `BiasRandomWalkStdDev² × sample interval`. The current source corrects the former generator's half-sized variance by using the shared Box–Muller helper. Nonzero IMU noise or random walk therefore produces a different fixed-seed sequence from earlier versions; the same seed and sampling sequence remain repeatable within this implementation. Properties, asset defaults and the default zero-noise output are unchanged. These source changes have not been released.
 
+The unreleased **0.2.0** source requires uBotCore `^0.2.0`. Rebuild all dependent uBot modules together; do not mix 0.1.x DLLs with 0.2.0. See [Core API migration](https://astreox.github.io/uBotDocs/develop/migration/#core-旧-ros-api-迁移020-开发版). The installation examples below use released 0.1.x tags.
+
 ## Install
 
 **Recommended: uBot Manager.** Download the installer from the [uBotManager releases](https://github.com/AstreoX/uBotManager/releases), open the project's `.uproject`, select `UBotSensor` in the **Packages** view, click **Install**, then **Apply…**. uBotCore is installed as a dependency; the plugin goes into `Plugins/uBot/`.
